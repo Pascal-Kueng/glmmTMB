@@ -1106,10 +1106,77 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
              times = match(times0, times))
     }
 
+    checkXAr1Observed <- function(struc, xinfo, Zt) {
+        if (inherits(Zt, "Matrix")) {
+            ZtT <- as(Zt, "TsparseMatrix")
+            rows <- ZtT@i + 1L
+            vals <- ZtT@x
+        } else {
+            nz <- which(Zt != 0, arr.ind = TRUE)
+            if (!nrow(nz)) return(invisible(NULL))
+            rows <- nz[, 1]
+            vals <- Zt[nz]
+        }
+        rows <- rows[vals != 0]
+        if (!length(rows)) return(invisible(NULL))
+
+        n_per_re <- tabulate(rows, nbins = nrow(Zt))
+        block <- length(xinfo$members)
+        ngroup <- nrow(Zt) / block
+        counts <- matrix(n_per_re, nrow = block, ncol = ngroup)
+        for (g in seq_len(ngroup)) {
+            for (tt in unique(xinfo$times)) {
+                kk <- which(xinfo$times == tt)
+                cc <- counts[kk, g]
+                if (any(cc > 1) && any(cc == 0)) {
+                    k <- kk[which(cc > 1)[1]]
+                    stop(sprintf(
+                        paste0(
+                        "%s() found duplicate observations for one member/role coordinate ",
+                        "and no observations for another member/role coordinate in the same ",
+                        "group-time block (group index %d, member coordinate %d, time ",
+                        "coordinate %d). Repeated observations per member-time coordinate ",
+                        "are allowed only when the role grid is otherwise complete. For ",
+                        "distinguishable dyads, the first membertime() argument must identify ",
+                        "one role per person within each dyad-time point; same-sex dyads ",
+                        "cannot use gender as this role variable. Use homcsxar1(membertime(",
+                        "stable_member, time) + 0 | group) for exchangeable dyads, define ",
+                        "another stable role variable, or subset to dyads with one row for ",
+                        "each role."
+                        ),
+                        struc, g, xinfo$members[k], xinfo$times[k]), call. = FALSE)
+                }
+            }
+        }
+
+        obs_rows <- which(n_per_re > 0)
+        g <- floor((obs_rows - 1) / block) + 1
+        k <- ((obs_rows - 1) %% block) + 1
+        observed_members <- split(xinfo$members[k], g)
+        one_member_groups <- names(observed_members)[
+            vapply(observed_members, function(x) length(unique(x)) < 2, logical(1))
+        ]
+        if (length(one_member_groups) > 0) {
+            warning(sprintf(
+                paste0(
+                    "%s() found %d grouping level(s) with observations for fewer ",
+                    "than two member/role levels. Occasional missing member-time rows ",
+                    "are allowed, but unit-level missingness provides little direct ",
+                    "information about the member-by-time covariance for those groups. ",
+                    "Check that this is intentional and that membertime(member, time) ",
+                    "uses a stable member/role variable."
+                ),
+                struc, length(one_member_groups)), call. = FALSE)
+        }
+
+        invisible(NULL)
+    }
+
     xAr1Info <- vector("list", length(ss))
     for (i in seq_along(ss)) {
         if (ss[i] %in% xAr1) {
             xAr1Info[[i]] <- checkXAr1Coord(ss[i], reTrms$cnms[[i]])
+            checkXAr1Observed(ss[i], xAr1Info[[i]], reTrms$Ztlist[[i]])
         }
     }
 

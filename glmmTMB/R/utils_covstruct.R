@@ -58,7 +58,9 @@ numFactor <- function(x, ...) {
 ##' @details \code{membertime} is a convenience wrapper for creating two-dimensional
 ##' coordinate factors for product covariance structures such as
 ##' \code{homcsxar1} and \code{unxar1}. It stores the first coordinate as the
-##' member/role index and the second coordinate as the time index. If
+##' member/role index and the second coordinate as the time index. The first
+##' coordinate may have two or more levels; dyads are the common motivating
+##' case, but larger groups are allowed. If
 ##' \code{member} is a factor, its levels are retained for compact
 ##' \code{print} and \code{summary} output. For \code{homcsxar1}, member
 ##' labels are exchangeable and may be arbitrary, but the first coordinate

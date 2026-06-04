@@ -7,6 +7,11 @@
 \section{CHANGES IN VERSION 1.1.15}{
   \subsection{NEW FEATURES}{
     \itemize{
+      \item New separable member-by-time covariance structures
+      \code{homcsxar1} and \code{unxar1} combine a homogeneous
+      compound-symmetric or unstructured member covariance with an AR(1)
+      time covariance. The helper functions \code{membertime()} and
+      \code{mt()} create the required member-by-time coordinate factor.
       \item Dunn-Smyth residuals (\code{type = "dunn-smyth"} in
       \code{residuals()}) are now available for the \code{bell} and
       \code{genpois} families; the Bell distribution uses internal C-level
@@ -774,4 +779,3 @@ but signifies that glmmTMB is considered stable and reliable for general use.
      }
    }
  }
-

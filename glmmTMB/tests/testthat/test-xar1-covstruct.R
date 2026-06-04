@@ -1,11 +1,14 @@
 stopifnot(require("testthat"),
           require("glmmTMB"))
 
-mk_xar1_dat <- function(ng = 3, nt = 3, drop = FALSE) {
-    dd <- expand.grid(group = factor(seq_len(ng)), member = 1:2, time = seq_len(nt))
+mk_xar1_dat <- function(ng = 3, nt = 3, nmember = 2, drop = FALSE) {
+    dd <- expand.grid(group = factor(seq_len(ng)),
+                      member = seq_len(nmember),
+                      time = seq_len(nt))
     if (drop) {
         dd <- dd[!(dd$group == 1 & dd$member == 2 & dd$time == nt), ]
-        full <- numFactor(rep(1:2, nt), rep(seq_len(nt), each = 2))
+        full <- numFactor(rep(seq_len(nmember), nt),
+                          rep(seq_len(nt), each = nmember))
         obs <- numFactor(dd$member, dd$time)
         dd$mt <- factor(as.character(obs), levels = levels(full))
     } else {
@@ -42,6 +45,27 @@ test_that("separable AR1 structures parse and evaluate", {
     m2 <- glmmTMB(y ~ 1 + unxar1(mt + 0 | group), data = dd,
                   dispformula = ~0, doFit = FALSE)
     expect_equal(m2$condReStruc[[1]]$blockNumTheta, 4)
+    obj2 <- fitTMB(m2, doOptim = FALSE)
+    expect_true(is.finite(obj2$fn(obj2$par)))
+})
+
+test_that("separable AR1 structures support more than two member levels", {
+    dd <- mk_xar1_dat(nmember = 3)
+
+    m1 <- suppressWarnings(
+        glmmTMB(y ~ 1 + homcsxar1(mt + 0 | group), data = dd,
+                dispformula = ~0, doFit = FALSE))
+    expect_equal(m1$condReStruc[[1]]$blockSize, 9)
+    expect_equal(m1$condReStruc[[1]]$blockNumTheta, 3)
+    expect_equal(m1$condReStruc[[1]]$sepMembers, rep(1:3, 3))
+    expect_equal(m1$condReStruc[[1]]$sepTimes, rep(1:3, each = 3))
+    obj1 <- fitTMB(m1, doOptim = FALSE)
+    expect_true(is.finite(obj1$fn(obj1$par)))
+
+    m2 <- glmmTMB(y ~ 1 + unxar1(mt + 0 | group), data = dd,
+                  dispformula = ~0, doFit = FALSE)
+    expect_equal(m2$condReStruc[[1]]$blockSize, 9)
+    expect_equal(m2$condReStruc[[1]]$blockNumTheta, 7)
     obj2 <- fitTMB(m2, doOptim = FALSE)
     expect_true(is.finite(obj2$fn(obj2$par)))
 })
@@ -156,6 +180,16 @@ test_that("separable AR1 validates coordinate input", {
         glmmTMB(y ~ 1 + homcsxar1(badtime + 0 | group), data = dd, doFit = FALSE),
         "discrete unit-spaced time"
     )
+
+    dd_dup <- dd
+    dd_dup$role <- factor(ifelse(dd_dup$member == 1, "male", "female"),
+                          levels = c("male", "female"))
+    dd_dup$role[dd_dup$group == 1 & dd_dup$time == 1] <- "male"
+    expect_error(
+        glmmTMB(y ~ 1 + unxar1(membertime(role, time) + 0 | group),
+                data = dd_dup, dispformula = ~0, doFit = FALSE),
+        "duplicate observations.*same-sex dyads cannot use gender"
+    )
 })
 
 test_that("separable AR1 handles missing observations within groups", {
@@ -166,6 +200,17 @@ test_that("separable AR1 handles missing observations within groups", {
     expect_equal(m1$condReStruc[[1]]$blockSize, 6)
     obj1 <- fitTMB(m1, doOptim = FALSE)
     expect_true(is.finite(obj1$fn(obj1$par)))
+
+    dd_unit <- mk_xar1_dat()
+    full <- numFactor(rep(1:2, 3), rep(1:3, each = 2))
+    dd_unit <- dd_unit[!(dd_unit$group == 1 & dd_unit$member == 2), ]
+    obs <- numFactor(dd_unit$member, dd_unit$time)
+    dd_unit$mt <- factor(as.character(obs), levels = levels(full))
+    expect_warning(
+        glmmTMB(y ~ 1 + unxar1(mt + 0 | group), data = dd_unit,
+                dispformula = ~0, doFit = FALSE),
+        "fewer than two member/role levels"
+    )
 })
 
 test_that("separable AR1 warns about dispersion interpretation", {
