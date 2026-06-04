@@ -34,13 +34,19 @@ For two distinguishable members, it also implies symmetric lagged cross-role cov
 Corr(A_t, B_{t+k}) = Corr(B_t, A_{t+k}) = rho_AB * phi^k
 ```
 
-Therefore v0.0.1 should not claim to fully solve distinguishable dyadic ILD covariance. The priority follow-up is a nonseparable diagonal VAR(1)-style structure, tentatively `var1diag()`, with role-specific AR parameters and correlated innovations. A later full bivariate VAR(1) structure should add cross-lagged transition parameters.
+Therefore v0.0.1 should not claim to fully solve distinguishable dyadic ILD covariance. It should also not claim that `homcsxar1()` is the final exchangeable-dyad dynamic model: it is the clean separable exchangeable AR(1) target, but it has no cross-lag transition parameter.
+
+The priority follow-up is a small VAR(1) family:
+
+- `var1diag()` for distinguishable dyads, with role-specific AR parameters and correlated innovations;
+- full `var1()` for distinguishable dyads, adding cross-lagged transition parameters;
+- a symmetric/exchangeable VAR(1), tentatively `var1sym()` or `var1exch()`, that is invariant to swapping arbitrary dyad-member labels.
 
 ## Non-goals for v0.0.1
 
 - No OU/continuous-time margin.
 - No general `sep(member = ..., time = ...)` formula syntax.
-- No nonseparable diagonal VAR(1) or full bivariate VAR(1) structure.
+- No nonseparable VAR(1) structures, including distinguishable `var1diag()`/`var1()` or symmetric exchangeable VAR(1).
 - No mixed distinguishable/exchangeable groups in one covariance term.
 - No Kronecker-optimized likelihood; use dense per-group MVN likelihood first.
 - No large vignette set. Keep docs minimal and add fuller documentation after validation.
@@ -365,9 +371,13 @@ Nice-to-have additions:
 - A short comparison note explaining why `homcs(member + 0 | group:time) + ar1(time + 0 | person)` is not equivalent to `homcsxar1(member_time + 0 | group)`.
 - A warning when `M * T` is large enough that dense MVN evaluation will be slow or memory-heavy.
 
-### Priority extension after v0.0.1
+### Priority VAR(1) extensions after v0.0.1
 
-The next implementation priority is a nonseparable distinguishable-dyad covariance structure:
+The next implementation priority is a nonseparable VAR(1) family for dyadic ILD. There should be both distinguishable and exchangeable/symmetric targets.
+
+#### Distinguishable diagonal VAR(1)
+
+The first distinguishable-dyad target is:
 
 ```r
 var1diag(membertime(role, time) + 0 | group)
@@ -389,15 +399,68 @@ This should support:
 - asymmetric lagged cross-role covariance when `phi_A != phi_B`;
 - the same Gaussian/non-Gaussian latent-process interpretation and dispersion warnings used for v0.0.1.
 
+This is the main path beyond `unxar1()` when roles are meaningful but cross-lagged transition parameters are not yet needed.
+
+#### Distinguishable full VAR(1)
+
+The later full distinguishable target is:
+
+```r
+var1(membertime(role, time) + 0 | group)
+```
+
+This should allow a full 2 x 2 transition matrix:
+
+```text
+A_t = phi_AA * A_{t-1} + phi_AB * B_{t-1} + eps_A,t
+B_t = phi_BA * A_{t-1} + phi_BB * B_{t-1} + eps_B,t
+```
+
+The transition matrix must be parameterized so its eigenvalues remain inside the unit circle.
+
+#### Exchangeable symmetric VAR(1)
+
+Exchangeable/indistinguishable dyads also need a nonseparable VAR(1) target, because `homcsxar1()` is separable and does not model symmetric cross-lagged influence. Tentative names:
+
+```r
+var1sym(membertime(member, time) + 0 | group)
+var1exch(membertime(member, time) + 0 | group)
+```
+
+Target process in member coordinates:
+
+```text
+A_t = alpha * A_{t-1} + gamma * B_{t-1} + eps_A,t
+B_t = gamma * A_{t-1} + alpha * B_{t-1} + eps_B,t
+```
+
+with exchangeable innovations:
+
+```text
+Var(eps_A,t) = Var(eps_B,t)
+Cov(eps_A,t, eps_B,t) unrestricted within the exchangeable bounds
+```
+
+This is equivalent to fitting independent AR(1) dynamics in sum/difference coordinates:
+
+```text
+S_t = phi_S * S_{t-1} + eps_S,t
+D_t = phi_D * D_{t-1} + eps_D,t
+```
+
+where `phi_S = alpha + gamma` and `phi_D = alpha - gamma`. The stationarity constraints are therefore `abs(phi_S) < 1` and `abs(phi_D) < 1`. This parameterization is attractive because it preserves exchangeability and gives a simple stable transformation.
+
 Initial implementation constraints should probably be:
 
-- exactly two roles;
+- exactly two members/roles;
 - unit-spaced discrete time;
 - stationary covariance construction;
 - dense MVN likelihood first;
-- no cross-lagged transition parameters until a later full `var1()` structure.
+- `var1diag()` has no cross-lagged transition parameters;
+- symmetric exchangeable VAR(1) has one label-swap-invariant cross-lag parameter;
+- unrestricted cross-lagged transition parameters are deferred to full distinguishable `var1()`.
 
-A later full bivariate VAR(1) should allow cross-lagged transition parameters and will require a stable parameterization of the 2 x 2 transition matrix.
+A later full distinguishable bivariate VAR(1) should allow unrestricted cross-lagged transition parameters and will require a stable parameterization of the 2 x 2 transition matrix.
 
 ## Development sequence
 

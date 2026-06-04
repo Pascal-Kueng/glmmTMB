@@ -41,7 +41,7 @@ This directly gives cross-partner lagged dependence, for example:
 
 The immediate goal is to implement this as a new covariance structure in a fork of `glmmTMB`, initially for dyads and then with a path toward triads and arbitrary small groups.
 
-Important scope clarification: separable member × time covariance is a clean target for exchangeable/indistinguishable dyads and a useful restricted model for distinguishable dyads, but it is not the full distinguishable dyadic ILD covariance model. For distinguishable dyads, a fully clean model should allow member-specific autoregression and eventually cross-lagged dependence. That requires nonseparable bivariate VAR-style covariance structures, discussed below as a priority extension.
+Important scope clarification: separable member × time covariance is a clean first target for exchangeable/indistinguishable dyads and a useful restricted model for distinguishable dyads, but it is not the final dynamic covariance model for either case. For distinguishable dyads, a fully clean model should allow member-specific autoregression and eventually cross-lagged dependence. For exchangeable dyads, a fully clean nonseparable model should allow symmetric cross-lagged dynamics while remaining invariant to swapping arbitrary member labels. Both require bivariate VAR(1)-style covariance structures, discussed below as priority extensions.
 
 ## 2. Why start with `glmmTMB`
 
@@ -213,7 +213,15 @@ Possible future approaches:
 
 This should be considered a future extension. The prototype should focus first on exchangeable dyads with `homcsxar1()` and a restricted/common-AR distinguishable model with `unxar1()`.
 
-### 4.5 Priority nonseparable extension for distinguishable dyads: diagonal VAR(1)
+### 4.5 Priority nonseparable VAR(1) extensions
+
+After the separable v0.0.1 structures, the next major target should be a small VAR(1) family for dyadic ILD:
+
+- `var1diag()` for distinguishable dyads with role-specific inertia and correlated innovations;
+- `var1()` for distinguishable dyads with a full 2 x 2 transition matrix;
+- a symmetric exchangeable VAR(1), tentatively `var1sym()` or `var1exch()`, for indistinguishable dyads with label-swap-invariant cross-lagged dynamics.
+
+### 4.5.1 Distinguishable dyads: diagonal VAR(1)
 
 For distinguishable dyads, the next priority after the separable v0.0.1 structures should be a nonseparable diagonal VAR(1)-style covariance, tentatively:
 
@@ -278,7 +286,7 @@ For positive lags:
 
 This structure is still simpler than a full bivariate VAR(1), but it captures the key distinguishable-dyad requirement that role A and role B can have different inertia.
 
-### 4.6 Longer-term full bivariate VAR(1)
+### 4.5.2 Distinguishable dyads: full bivariate VAR(1)
 
 A full bivariate VAR(1) covariance would allow cross-lagged dynamics:
 
@@ -304,6 +312,57 @@ B_{t-1}
 \]
 
 This is the most complete distinguishable dyadic ILD covariance target, but it requires a stable parameterization of the 2 × 2 transition matrix. The eigenvalues of the transition matrix must lie inside the unit circle. This makes it a larger implementation and validation project than `var1diag()`.
+
+### 4.5.3 Exchangeable dyads: symmetric VAR(1)
+
+Exchangeable/indistinguishable dyads also need a nonseparable VAR(1) target. `homcsxar1()` is useful and parsimonious, but it is separable: lagged cross-member covariance is forced to be same-time member correlation times a common AR(1) decay. A symmetric VAR(1) would preserve exchangeability while allowing cross-lagged dynamics.
+
+Tentative syntax:
+
+```r
+var1sym(membertime(member_in_dyad, diaryday) + 0 | coupleID)
+```
+
+or:
+
+```r
+var1exch(membertime(member_in_dyad, diaryday) + 0 | coupleID)
+```
+
+In original member coordinates:
+
+\[
+\begin{aligned}
+A_t &= \alpha A_{t-1} + \gamma B_{t-1} + \epsilon_{A,t}, \\
+B_t &= \gamma A_{t-1} + \alpha B_{t-1} + \epsilon_{B,t}.
+\end{aligned}
+\]
+
+The innovation covariance must also be exchangeable:
+
+\[
+\operatorname{Var}(\epsilon_{A,t}) = \operatorname{Var}(\epsilon_{B,t}), \quad
+\operatorname{Cov}(\epsilon_{A,t}, \epsilon_{B,t}) = \sigma_{\epsilon,AB}.
+\]
+
+A convenient implementation parameterization is the sum/difference basis:
+
+\[
+S_t = \frac{A_t+B_t}{\sqrt{2}}, \quad D_t = \frac{A_t-B_t}{\sqrt{2}},
+\]
+
+\[
+S_t = \phi_S S_{t-1} + \epsilon_{S,t}, \quad
+D_t = \phi_D D_{t-1} + \epsilon_{D,t}.
+\]
+
+Then:
+
+\[
+\phi_S = \alpha + \gamma, \quad \phi_D = \alpha - \gamma,
+\]
+
+and stationarity is easy to enforce by constraining \(|\phi_S| < 1\) and \(|\phi_D| < 1\). This parameterization naturally preserves label-swap invariance and should be the preferred design candidate for an exchangeable VAR(1).
 
 ## 5. User-facing syntax strategy
 
@@ -404,9 +463,13 @@ Important: keep `Idiff` and `member_in_dyad` conceptually separate.
 - `member_in_dyad` is a coordinate index used in the covariance structure.
 - If `Idiff` is used in the mean/random-effects model, use the same stable member assignment for `membertime(member_in_dyad, diaryday)` so the mean-model difference coding and covariance coordinate refer to the same within-dyad positions.
 
-### 6.2 Phase 2: priority distinguishable dyad extension with diagonal VAR(1)
+### 6.2 Phase 2: priority dyad VAR(1) extensions
 
-Implement a nonseparable diagonal VAR(1)-style covariance for distinguishable dyads:
+Implement nonseparable VAR(1)-style covariance structures for distinguishable and exchangeable dyads.
+
+#### 6.2.1 Distinguishable diagonal VAR(1)
+
+Start with:
 
 ```r
 var1diag(membertime(role_index, diaryday) + 0 | coupleID)
@@ -423,7 +486,34 @@ Initial assumptions:
 
 This should be treated as the main path to a clean distinguishable-dyad covariance model.
 
-### 6.3 Phase 3: full bivariate VAR(1)
+#### 6.2.2 Exchangeable symmetric VAR(1)
+
+Add a symmetric VAR(1) structure for exchangeable dyads:
+
+```r
+var1sym(membertime(member_in_dyad, diaryday) + 0 | coupleID)
+```
+
+or, if maintainers prefer a clearer name:
+
+```r
+var1exch(membertime(member_in_dyad, diaryday) + 0 | coupleID)
+```
+
+Initial assumptions:
+
+- exactly two exchangeable members for the first implementation;
+- stable arbitrary member assignment within each dyad across time;
+- unit-spaced discrete time;
+- symmetric transition matrix in original member coordinates;
+- equivalent sum/difference AR(1) parameterization with \(\phi_S\), \(\phi_D\);
+- exchangeable innovation covariance;
+- stationarity enforced via \(|\phi_S| < 1\), \(|\phi_D| < 1\);
+- same Gaussian/non-Gaussian latent-process interpretation and dispersion warnings as the separable structures.
+
+This should be treated as the main path beyond `homcsxar1()` when exchangeable dyads need nonseparable cross-lagged dynamics.
+
+### 6.3 Phase 3: full distinguishable bivariate VAR(1)
 
 Implement a full bivariate VAR(1) covariance after `var1diag()` is validated:
 
@@ -613,7 +703,7 @@ and
 \propto \phi^k.
 \]
 
-For a cleaner distinguishable-dyad covariance model, the next target should be `var1diag()`.
+For a cleaner distinguishable-dyad covariance model, the next target should be `var1diag()`. For exchangeable dyads that need nonseparable cross-lagged dynamics, the parallel target should be a symmetric exchangeable VAR(1), tentatively `var1sym()` or `var1exch()`.
 
 ### 7.3 Distinguishable dyads: priority `var1diag()` target
 
@@ -645,7 +735,41 @@ This would allow role-specific temporal persistence:
 \phi_{\text{male}} \neq \phi_{\text{female}}.
 \]
 
-It is the natural next implementation target before attempting a full bivariate VAR(1) with cross-lagged dynamics.
+It is the natural next distinguishable implementation target before attempting a full bivariate VAR(1) with cross-lagged dynamics.
+
+### 7.4 Exchangeable dyads: priority symmetric VAR(1) target
+
+The priority nonseparable extension for exchangeable/indistinguishable dyads is a symmetric VAR(1):
+
+```r
+df$member_in_dyad <- ifelse(df$Idiff > 0, 1L, 2L)
+df$member_day <- glmmTMB::numFactor(df$member_in_dyad, df$diaryday)
+
+fit_exchangeable_var1sym <- glmmTMB(
+  closeness ~
+    1 +
+    diaryday_c +
+    provided_support_actor_cwp +
+    provided_support_partner_cwp +
+    provided_support_actor_cbp +
+    provided_support_partner_cbp +
+    var1sym(member_day + 0 | coupleID),
+  data = df,
+  family = gaussian(),
+  dispformula = ~ 0
+)
+```
+
+In member coordinates, this would allow symmetric cross-lagged dynamics:
+
+\[
+\begin{aligned}
+A_t &= \alpha A_{t-1} + \gamma B_{t-1} + \epsilon_{A,t}, \\
+B_t &= \gamma A_{t-1} + \alpha B_{t-1} + \epsilon_{B,t}.
+\end{aligned}
+\]
+
+The structure remains exchangeable because swapping the arbitrary member labels leaves the model unchanged. A practical implementation should use the sum/difference basis with separate \(\phi_S\) and \(\phi_D\) parameters.
 
 For Gaussian outcomes, if `dispformula` is not set to `~ 0`, a structured covariance term becomes a latent process plus independent residual/nugget variance. For separable terms:
 
@@ -655,7 +779,7 @@ For Gaussian outcomes, if `dispformula` is not set to `~ 0`, a structured covari
 
 This may be appropriate if independent measurement error is intended, but it is not the pure residual Kronecker covariance model.
 
-### 7.4 Gaussian distinguishable dyads with role-specific nugget variance
+### 7.5 Gaussian distinguishable dyads with role-specific nugget variance
 
 This can be meaningful:
 
@@ -838,11 +962,15 @@ unxar1(role_day + 0 | coupleID)
 # Priority nonseparable distinguishable model
 var1diag(role_day + 0 | coupleID)
 
+# Priority nonseparable exchangeable model
+var1sym(member_day + 0 | coupleID)
+
 # Full unstructured member-time covariance, small T only
 us(role_day + 0 | coupleID)
 ```
 
 The expected improvement of `var1diag()` over `unxar1()` is recovery of role-specific inertia and asymmetric lagged cross-role covariance.
+The expected improvement of `var1sym()`/`var1exch()` over `homcsxar1()` is recovery of symmetric cross-lagged dynamics while preserving exchangeability.
 
 ### 9.5 Warning tests
 
@@ -863,7 +991,8 @@ Documentation should include:
 2. Dyadic APIM/DIM vignette:
    - exchangeable dyads with `homcsxar1()`;
    - restricted distinguishable dyads with `unxar1()`;
-   - priority distinguishable extension with `var1diag()` once implemented.
+   - priority distinguishable extension with `var1diag()` once implemented;
+   - priority exchangeable extension with `var1sym()`/`var1exch()` once implemented.
 3. Residual-vs-latent interpretation vignette:
    - Gaussian pure residual covariance with `dispformula = ~ 0`.
    - Gaussian latent process plus nugget with `dispformula != ~ 0`.
@@ -872,8 +1001,11 @@ Documentation should include:
 5. Distinguishable-dyad limitation note:
    - `unxar1()` assumes a common AR parameter across roles.
    - `var1diag()` is the planned clean distinguishable covariance target.
-   - full bivariate VAR(1) is the later target for cross-lagged covariance.
-6. Developer notes: covariance construction, parameter mapping, row ordering, and missingness handling.
+   - full distinguishable bivariate VAR(1) is the later target for unrestricted cross-lagged covariance.
+6. Exchangeable-dyad limitation note:
+   - `homcsxar1()` is separable and does not estimate a symmetric cross-lagged transition parameter.
+   - `var1sym()`/`var1exch()` is the planned clean exchangeable VAR(1) target.
+7. Developer notes: covariance construction, parameter mapping, row ordering, and missingness handling.
 
 ## 11. Open design questions
 
@@ -883,10 +1015,12 @@ Documentation should include:
 4. Should `var1diag()` be named as a covariance structure (`var1diag`) or as a separable-family extension name (`ar1_diag`, `diag_var1`, etc.)?
 5. Should `var1diag()` be parameterized by innovation SDs/correlation plus AR parameters, or by stationary marginal SDs/correlation plus AR parameters?
 6. What is the best stable parameterization for the full 2 × 2 VAR(1) transition matrix?
-7. Should OU be implemented immediately after AR1, or after the distinguishable `var1diag()` implementation?
-8. Can the implementation exploit Kronecker algebra for balanced data, while falling back to observed submatrices for missing/unbalanced data?
-9. How should non-Gaussian dispersion warnings be calibrated for families where `dispformula = ~ 0` is technically allowed but rarely intended?
-10. Should a small Stan reference implementation be built in parallel for validation, especially for `var1diag()` and full VAR(1)?
+7. Should the exchangeable symmetric VAR(1) be named `var1sym()`, `var1exch()`, or something closer to existing covariance naming?
+8. Should symmetric exchangeable VAR(1) be implemented directly in member coordinates, or via the sum/difference AR(1) basis?
+9. Should OU be implemented immediately after AR1, or after the dyadic VAR(1) implementations?
+10. Can the implementation exploit Kronecker algebra for balanced data, while falling back to observed submatrices for missing/unbalanced data?
+11. How should non-Gaussian dispersion warnings be calibrated for families where `dispformula = ~ 0` is technically allowed but rarely intended?
+12. Should a small Stan reference implementation be built in parallel for validation, especially for `var1diag()`, `var1sym()`/`var1exch()`, and full VAR(1)?
 
 ## 12. External references to check while implementing
 
@@ -906,14 +1040,14 @@ Documentation should include:
 6. Simulate small balanced exchangeable and restricted distinguishable dyad datasets and verify covariance recovery.
 7. Add warning checks for Gaussian and non-Gaussian `dispformula` behavior.
 8. Add explicit documentation that `unxar1()` is not a full distinguishable VAR model.
-9. Begin design notes for `var1diag()` as the next priority extension.
+9. Begin design notes for the dyadic VAR(1) family: `var1diag()`, symmetric exchangeable VAR(1), and full distinguishable `var1()`.
 10. Open a `glmmTMB` GitHub issue before submitting a PR, explaining:
    - dyadic ILD motivation;
    - why current additive structures are not equivalent;
    - proposed minimal syntax;
    - simulation validation;
    - v0.0.1 scope as exchangeable plus restricted distinguishable separable covariance;
-   - priority future extension to `var1diag()` and full bivariate VAR(1);
+   - priority future extension to the dyadic VAR(1) family: `var1diag()`, symmetric exchangeable VAR(1), and full distinguishable `var1()`;
    - future generalization to triads and arbitrary small groups.
 
 ## 14. Pre-PR cleanup
