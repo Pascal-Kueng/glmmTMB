@@ -313,18 +313,23 @@ test_that("membertime numeric member labels preserve observed values", {
     expect_true(any(grepl("member1020 x day members 10:20 lag 1", p2, fixed = TRUE)))
 })
 
-test_that("dharma_xar1 exposes standardized latent innovations", {
+test_that("dharma_xar1 exposes Gaussian marginal normalized residuals", {
     dd <- mk_xar1_dat(ng = 8, nt = 3)
+    dd$x <- rnorm(nrow(dd))
     m1 <- suppressWarnings(
-        glmmTMB(y ~ 1 + homcsxar1(mt + 0 | group), data = dd,
+        glmmTMB(y ~ x + homcsxar1(mt + 0 | group), data = dd,
                 dispformula = ~0))
     dx <- dharma_xar1(m1)
 
     expect_s3_class(dx, "glmmTMB")
     expect_false(is.null(attr(dx, "dharma_xar1")))
-    expect_equal(nobs(dx), 8 * 2 * (3 - 1))
+    expect_equal(attr(dx, "dharma_xar1")$type, "marginal")
+    expect_equal(nobs(dx), nrow(dd))
     expect_equal(length(residuals(dx)), nobs(dx))
     expect_equal(length(predict(dx)), nobs(dx))
+    expect_equal(predict(dx), as.vector(getME(m1, "X") %*% fixef(m1)$cond),
+                 ignore_attr = TRUE)
+    expect_gt(length(unique(predict(dx))), 1)
     expect_equal(nrow(model.frame(dx)), nobs(dx))
 
     sim <- simulate(dx, nsim = 3, seed = 1)
@@ -335,6 +340,21 @@ test_that("dharma_xar1 exposes standardized latent innovations", {
     res <- DHARMa::simulateResiduals(dx, n = 5, seed = 1)
     expect_equal(length(res$scaledResiduals), nobs(dx))
     expect_equal(dim(res$simulatedResponse), c(nobs(dx), 5))
+})
+
+test_that("dharma_xar1 works for unxar1 and rejects non-Gaussian models", {
+    dd <- mk_xar1_dat(ng = 6, nt = 3)
+    m1 <- glmmTMB(y ~ 1 + unxar1(mt + 0 | group), data = dd,
+                  dispformula = ~0)
+    dx <- dharma_xar1(m1)
+    expect_equal(nobs(dx), nrow(dd))
+    expect_equal(length(residuals(dx)), nrow(dd))
+
+    dd$count <- rpois(nrow(dd), lambda = 2)
+    m2 <- suppressWarnings(
+        glmmTMB(count ~ 1 + unxar1(mt + 0 | group), data = dd,
+                family = poisson))
+    expect_error(dharma_xar1(m2), "Gaussian identity-link")
 })
 
 test_that("membertime ignores unused factor levels when storing labels", {

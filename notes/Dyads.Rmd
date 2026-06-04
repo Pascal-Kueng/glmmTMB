@@ -27,7 +27,12 @@ dat <- df_merged %>%
   rename(
     closeness = daily_ss_closeness,
     mood = daily_ss_affect1,
-    gender = baseline_gender_option
+    gender = baseline_gender_option,
+    mvpa = actigraph_MVPA_staudenmayer,
+    weartime = actigraph_wear_minutes
+  ) %>%
+  mutate(
+    mvpa_selfreport = daily_ss_pa_min_solo + daily_ss_pa_min_collab
   ) %>%
   
   select(
@@ -36,18 +41,28 @@ dat <- df_merged %>%
     diaryday,
     closeness, 
     mood,
-    gender
+    gender,
+    mvpa,
+    weartime, 
+    mvpa_selfreport
   ) %>%
   
   group_by(userID) %>%
   mutate(
-    closeness_pm = mean(closeness, na.rm = TRUE)
+    closeness_pm = mean(closeness, na.rm = TRUE),
+    weartime_pm = mean(weartime, na.rm = TRUE)
   ) %>% 
   ungroup() %>%
   mutate(
     closeness_gm = mean(closeness_pm, na.rm = TRUE),
     closeness_cw = closeness - closeness_pm, 
-    closeness_cb= closeness_pm - closeness_gm
+    closeness_cb= closeness_pm - closeness_gm,
+    
+    mvpa = ifelse(weartime > 600, mvpa, NA),
+    
+    weartime_gm = mean(weartime_pm, na.rm = TRUE),
+    weartime_cw = weartime - weartime_pm, 
+    weartime_cb = weartime_pm - weartime_gm
   )
   
 ```
@@ -89,17 +104,63 @@ dyads <- dyads %>%
       Idiff,
       levels = c(-1, 1),
       labels = c("member_minus", "member_plus")
+    ),
+    role_pos = factor(
+      group_role,
+      levels = c("male", "female")
     )
   ) %>%
   ungroup() %>%
   relocate(Idiff, .after = coupleID) %>%
+  relocate(role_pos, .after = member_pos) %>%
   relocate(member_pos, .after = Idiff) %>%
   dplyr::select(-base, -flip)
 
 ```
 
+Check that distinguishable role coding is valid for `unxar1()`.
+
+```{r}
+
+role_grid_check <- dyads %>%
+  filter(!is.na(role_pos)) %>%
+  count(coupleID, diaryday, role_pos, name = "n_role_day") %>%
+  count(coupleID, diaryday, name = "n_roles") %>%
+  filter(n_roles != nlevels(dyads$role_pos))
+
+role_duplicate_check <- dyads %>%
+  filter(!is.na(role_pos)) %>%
+  count(coupleID, diaryday, role_pos, name = "n_role_day") %>%
+  filter(n_role_day != 1)
+
+role_grid_check
+role_duplicate_check
+
+dyads_distinguishable <- dyads %>%
+  semi_join(
+    dyads %>%
+      filter(!is.na(role_pos)) %>%
+      count(coupleID, diaryday, role_pos, name = "n_role_day") %>%
+      group_by(coupleID, diaryday) %>%
+      summarise(
+        complete_roles = n() == nlevels(dyads$role_pos) && all(n_role_day == 1),
+        .groups = "drop"
+      ) %>%
+      group_by(coupleID) %>%
+      summarise(all_complete_roles = all(complete_roles), .groups = "drop") %>%
+      filter(all_complete_roles),
+    by = "coupleID"
+  )
+
+n_distinct(dyads$coupleID)
+n_distinct(dyads_distinguishable$coupleID)
+
+```
+
 
 ## Exchangeable Dyads
+
+### Gaussian
 
 ```{r}
 
@@ -121,13 +182,139 @@ summary(m1_exchangeable)
 
 ```
 
-
 ```{r}
 
-latent_res <- DHARMa::simulateResiduals(
+res_mood_exchangeable <- DHARMa::simulateResiduals(
   dharma_xar1(m1_exchangeable),
   seed = 1
 )
-plot(latent_res)
+plot(res_mood_exchangeable)
+
+DHARMa::testQuantiles(res_mood_exchangeable)
 
 ```
+
+### nbinom
+
+```{r}
+
+m2_exchangeable <- glmmTMB(
+  as.integer(mvpa_selfreport) ~ 1 + diaryday 
+  + closeness_cw_actor + closeness_cw_partner 
+  + closeness_cb_actor + closeness_cb_partner
+  
+  + (1 | coupleID)
+  + (0 + Idiff | coupleID)
+  
+  + homcsxar1(mt(member_pos, diaryday) + 0 | coupleID)
+
+  , family = nbinom1
+  , data = dyads
+)
+
+summary(m2_exchangeable)
+
+```
+
+
+```{r}
+
+res_mvpa_exchangeable <- DHARMa::simulateResiduals(
+  m2_exchangeable,
+  seed = 1,
+  simulateREs = 'conditional'
+)
+
+plot(res_mvpa_exchangeable)
+
+DHARMa::testZeroInflation(res_mvpa_exchangeable)
+DHARMa::testDispersion(res_mvpa_exchangeable)
+DHARMa::testOutliers(res_mvpa_exchangeable)
+DHARMa::testQuantiles(res_mvpa_exchangeable)
+DHARMa::testUniformity(res_mvpa_exchangeable)
+
+```
+
+
+## Distinguishable Dyads
+
+### Gaussian
+
+```{r}
+
+m1_distinguishable <- glmmTMB(
+  mood ~ 0 + role_pos + diaryday:role_pos +
+    closeness_cw_actor:role_pos + closeness_cw_partner:role_pos +
+    closeness_cb_actor:role_pos + closeness_cb_partner:role_pos
+  
+  + (0 + role_pos + closeness_cw_actor:role_pos + closeness_cw_partner:role_pos | coupleID)
+  
+  + unxar1(mt(role_pos, diaryday) + 0 | coupleID)
+  
+  , dispformula = ~ 0
+  , data = dyads_distinguishable
+)
+
+summary(m1_distinguishable)
+
+```
+
+```{r}
+
+res_mood_distinguishable <- DHARMa::simulateResiduals(
+  dharma_xar1(m1_distinguishable),
+  seed = 1
+)
+plot(res_mood_distinguishable)
+
+DHARMa::testQuantiles(res_mood_distinguishable)
+
+```
+
+### nbinom
+
+```{r}
+
+m2_distinguishable <- glmmTMB(
+  as.integer(mvpa_selfreport) ~ 0 + role_pos + diaryday:role_pos 
+  + closeness_cw_actor:role_pos + closeness_cw_partner:role_pos 
+  + closeness_cb_actor:role_pos + closeness_cb_partner:role_pos
+  
+  + (0 + role_pos | coupleID)
+  
+  + unxar1(mt(role_pos, diaryday) + 0 | coupleID)
+
+  , family = nbinom2
+  , ziformula = ~1,
+  , data = dyads_distinguishable
+)
+
+summary(m2_distinguishable)
+
+```
+
+
+```{r}
+
+res_mvpa_distinguishable <- DHARMa::simulateResiduals(
+  m2_distinguishable,
+  seed = 1,
+  simulateREs = 'conditional'
+)
+
+plot(res_mvpa_distinguishable)
+
+DHARMa::testZeroInflation(res_mvpa_distinguishable)
+DHARMa::testDispersion(res_mvpa_distinguishable)
+DHARMa::testOutliers(res_mvpa_distinguishable)
+DHARMa::testQuantiles(res_mvpa_distinguishable)
+DHARMa::testUniformity(res_mvpa_distinguishable)
+
+```
+
+
+
+
+
+
+

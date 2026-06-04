@@ -142,7 +142,7 @@ predict.glmmTMB <- function(object,
                             do.bias.correct=FALSE,
                             bias.correct.control = list(sd = TRUE),
                             ...) {
-  if (!is.null(xar1_dharma_data(object))) return(rep(0, nobs(object)))
+  if (!is.null(xar1_dharma_data(object))) return(xar1_dharma_fitted(object))
   ## FIXME: implement 'complete' re.form (e.g. identify elements of Z or b that need to be zeroed out)
 
   check_dots(..., .action = "warning")

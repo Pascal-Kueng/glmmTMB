@@ -1,4 +1,4 @@
-## DHARMa diagnostics for latent separable member-by-time AR(1) terms.
+## DHARMa diagnostics for Gaussian models with separable member-by-time AR(1) terms.
 
 get_xar1_innovations <- function(fit, component = "cond", term = NULL) {
     if (!inherits(fit, "glmmTMB")) {
@@ -94,26 +94,136 @@ get_xar1_innovations <- function(fit, component = "cond", term = NULL) {
     )
 }
 
-##' Wrap separable AR(1) latent innovations for DHARMa diagnostics
+get_xar1_term_name <- function(fit, term = NULL) {
+    vc_list <- VarCorr(fit)$cond
+    is_xar1 <- vapply(
+        vc_list,
+        function(x) any(class(x) %in% c("vcmat_homcsxar1", "vcmat_unxar1")),
+        logical(1)
+    )
+    if (!any(is_xar1)) {
+        stop("No homcsxar1 or unxar1 term found in the fitted model.")
+    }
+    xar1_names <- names(vc_list)[is_xar1]
+    vc_name <- if (is.null(term)) {
+        if (length(xar1_names) > 1) {
+            warning("Multiple homcsxar1/unxar1 terms found; using the first. ",
+                    "Specify 'term' to choose a term explicitly.")
+        }
+        xar1_names[1]
+    } else if (is.numeric(term)) {
+        xar1_names[term]
+    } else if (term %in% names(vc_list)) {
+        term
+    } else {
+        stop("'term' must be NULL, a numeric index, or one of: ",
+             paste(xar1_names, collapse = ", "))
+    }
+    if (is.na(vc_name) || !vc_name %in% xar1_names) {
+        stop("'term' does not select a homcsxar1 or unxar1 term.")
+    }
+    vc_name
+}
+
+chol_with_jitter <- function(x) {
+    R <- try(chol(x), silent = TRUE)
+    if (!inherits(R, "try-error")) return(R)
+    eps <- sqrt(.Machine$double.eps) * max(1, max(diag(x)))
+    chol(x + diag(eps, nrow(x)))
+}
+
+get_xar1_marginal_residuals <- function(fit, term = NULL) {
+    if (!inherits(fit, "glmmTMB")) {
+        stop("'fit' must be a glmmTMB model.")
+    }
+    fam <- family(fit)
+    if (!(fam$family == "gaussian" && fam$link == "identity")) {
+        stop("dharma_xar1() currently provides marginal normalized residuals ",
+             "only for Gaussian identity-link models. For count or other ",
+             "non-Gaussian models, use DHARMa::simulateResiduals(fit, ",
+             "simulateREs = \"conditional\") for response-scale diagnostics.")
+    }
+    vc_name <- get_xar1_term_name(fit, term = term)
+
+    reTrms <- fit$modelInfo$reTrms$cond
+    if (is.null(reTrms$cnms)) {
+        stop("No conditional random effects found.")
+    }
+    flist <- reTrms$flist
+    if (length(flist) != 1 || !all(attr(flist, "assign") == 1)) {
+        stop("dharma_xar1() currently supports Gaussian models whose ",
+             "conditional random-effect terms all use a single grouping factor.")
+    }
+
+    group <- flist[[1]]
+    nlev <- nlevels(group)
+    Z <- getME(fit, "Z")
+    reStruc <- fit$modelInfo$reStruc$condReStruc
+    Gp <- cumsum(c(0, vapply(reStruc, function(x) x$blockReps * x$blockSize,
+                             numeric(1))))
+    if (length(Gp) != length(reStruc) + 1) {
+        stop("Could not align random-effect structure with the Z matrix.")
+    }
+    if (!all(vapply(reStruc, `[[`, numeric(1), "blockReps") == nlev)) {
+        stop("dharma_xar1() currently requires one random-effect block per ",
+             "level of the grouping factor for every conditional term.")
+    }
+
+    y <- model.response(fit$frame)
+    if (!is.numeric(y) || !is.null(dim(y))) {
+        stop("dharma_xar1() requires a numeric Gaussian response.")
+    }
+    X <- getME(fit, "X")
+    beta <- getParList(fit)$beta
+    mu <- as.vector(X %*% beta)
+    e <- y - mu
+
+    vc_list <- VarCorr(fit)$cond
+    Gblocks <- lapply(vc_list, as.matrix)
+    sigma2 <- sigma(fit)^2
+    z <- numeric(length(e))
+
+    for (g in seq_len(nlev)) {
+        rows <- which(as.integer(group) == g)
+        ng <- length(rows)
+        V <- diag(sigma2, ng)
+        for (i in seq_along(reStruc)) {
+            bs <- reStruc[[i]]$blockSize
+            cols <- Gp[i] + (g - 1) * bs + seq_len(bs)
+            Zg <- as.matrix(Z[rows, cols, drop = FALSE])
+            V <- V + Zg %*% Gblocks[[i]] %*% t(Zg)
+        }
+        R <- chol_with_jitter(V)
+        z[rows] <- forwardsolve(t(R), e[rows])
+    }
+
+    list(
+        term = vc_name,
+        type = "marginal",
+        group = names(flist)[1],
+        fitted = mu,
+        standardized = z
+    )
+}
+
+##' Wrap Gaussian separable AR(1) models for DHARMa diagnostics
 ##'
 ##' \code{dharma_xar1} returns a lightweight wrapper around a fitted
 ##' \code{glmmTMB} model with a \code{homcsxar1} or \code{unxar1} random-effect
-##' term. The wrapper lets \code{DHARMa::simulateResiduals()} diagnose the
-##' standardized one-step latent AR(1) innovations rather than the observed
-##' response. This is useful for Gaussian models fitted with
-##' \code{dispformula = ~0}, where the lowest-level residual process is modeled
-##' as a structured latent random effect.
+##' term. For Gaussian identity-link models, the wrapper lets
+##' \code{DHARMa::simulateResiduals()} diagnose marginal normalized residuals,
+##' i.e. fixed-effect residuals whitened by the fitted marginal covariance
+##' implied by the model's random-effect terms.
 ##'
 ##' @param fit a fitted \code{glmmTMB} model containing a \code{homcsxar1} or
 ##' \code{unxar1} term
-##' @param component model component; currently defaults to the conditional
-##' component
+##' @param component unused; retained for compatibility
 ##' @param term optional \code{homcsxar1}/\code{unxar1} term name or numeric
 ##' index if the model contains more than one such term
 ##' @return an object suitable for \code{DHARMa::simulateResiduals()}
-##' @details The resulting diagnostics are based on fitted conditional modes of
-##' the latent random effects. They are useful model checks, but should not be
-##' interpreted as ordinary response-scale residual diagnostics.
+##' @details The Gaussian diagnostic is conditional on fitted parameter values
+##' and uses the model-implied marginal covariance. Non-Gaussian models should
+##' generally be checked with ordinary response-scale DHARMa simulations.
 ##' @examples
 ##' \dontrun{
 ##' res <- DHARMa::simulateResiduals(dharma_xar1(fit))
@@ -121,7 +231,10 @@ get_xar1_innovations <- function(fit, component = "cond", term = NULL) {
 ##' }
 ##' @export
 dharma_xar1 <- function(fit, component = "cond", term = NULL) {
-    x <- get_xar1_innovations(fit, component = component, term = term)
+    if (component != "cond") {
+        stop("dharma_xar1() currently supports only the conditional component.")
+    }
+    x <- get_xar1_marginal_residuals(fit, term = term)
     attr(fit, "dharma_xar1") <- x
     fit
 }
@@ -134,7 +247,12 @@ xar1_dharma_response <- function(object) {
     as.vector(xar1_dharma_data(object)$standardized)
 }
 
+xar1_dharma_fitted <- function(object) {
+    as.vector(xar1_dharma_data(object)$fitted)
+}
+
 xar1_dharma_simulate <- function(object, nsim = 1, seed = NULL) {
+    set_simcodes(object$obj, val = "random")
     if (!exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
         runif(1)
     }
