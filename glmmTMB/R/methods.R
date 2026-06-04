@@ -34,11 +34,6 @@ mk_pop_pred <- function(re.form) {
 ##' @export fixef
 ##' @export
 fixef.glmmTMB <- function(object, ...) {
-  if (!is.null(xar1_dharma_data(object))) {
-    return(structure(list(cond = numeric(0), zi = numeric(0), disp = numeric(0)),
-                     class = "fixef.glmmTMB"))
-  }
-
   pl <- object$obj$env$parList(object$fit$par, object$fit$parfull)
   X <- Map(function(m) getME(object, paste0("X", m)), c("", "zi", "disp"))
 
@@ -384,7 +379,6 @@ logLik.glmmTMB <- function(object, ...) {
 ##' @importFrom stats nobs
 ##' @export
 nobs.glmmTMB <- function(object, ...) {
-    if (!is.null(xar1_dharma_data(object))) return(length(xar1_dharma_response(object)))
     sum(!is.na(object$obj$env$data$yobs))
 }
 
@@ -775,9 +769,6 @@ print.glmmTMB <-
 
 ##' @export
 model.frame.glmmTMB <- function(formula, ...) {
-    if (!is.null(xar1_dharma_data(formula))) {
-        return(data.frame(xar1_innovation = xar1_dharma_response(formula)))
-    }
     formula$frame
 }
 
@@ -804,7 +795,6 @@ model.frame.glmmTMB <- function(formula, ...) {
 ##' }
 ##' @export
 residuals.glmmTMB <- function(object, type=c("response", "pearson", "working", "deviance", "dunn-smyth"), re.form = NULL, ...) {
-    if (!is.null(xar1_dharma_data(object))) return(xar1_dharma_response(object))
     check_dots(...)
     pop_pred <- mk_pop_pred(re.form)
     type <- match.arg(type)
@@ -1399,7 +1389,6 @@ anova.glmmTMB <- function (object, ..., model.names = NULL)
 #' @importFrom stats predict
 #' @export
 fitted.glmmTMB <- function(object, ...) {
-    if (!is.null(xar1_dharma_data(object))) return(xar1_dharma_fitted(object))
     predict(object,type="response", fast=TRUE)
 }
 
@@ -1424,9 +1413,6 @@ noSim <- function(x) {
 ##' @importFrom stats simulate
 ##' @export
 simulate.glmmTMB<-function(object, nsim=1, seed=NULL, re.form = NULL, ...) {
-    if (!is.null(xar1_dharma_data(object))) {
-        return(xar1_dharma_simulate(object, nsim = nsim, seed = seed))
-    }
     if(noSim(object$modelInfo$family$family))
     {
     	stop("Simulation code has not been implemented for this family")
