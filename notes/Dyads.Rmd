@@ -208,7 +208,8 @@ m2_exchangeable <- glmmTMB(
   
   + homcsxar1(mt(member_pos, diaryday) + 0 | coupleID)
 
-  , family = nbinom1
+  , family = nbinom2, 
+  , ziformula = ~ 1,
   , data = dyads
 )
 
