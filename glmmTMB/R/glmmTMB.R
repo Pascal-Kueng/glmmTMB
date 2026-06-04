@@ -216,6 +216,7 @@ startParams <- function(parameters,
 ##' @param old_smooths (optional) smooth components from a previous fit: used when constructing a new model structure for prediction
 ##' from an existing model. A list of smooths for each model component; each smooth has sm and re elements
 ##' @param priors see \code{\link{priors}}
+##' @param dispformulaSpecified whether the user supplied \code{dispformula} explicitly
 ##' @keywords internal
 mkTMBStruc <- function(formula, ziformula, dispformula,
                        combForm,
@@ -240,7 +241,8 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
                        sparseX=NULL,
                        control=glmmTMBControl(),
                        old_smooths = NULL,
-                       priors = NULL) {
+                       priors = NULL,
+                       dispformulaSpecified = FALSE) {
 
 
   if (is.null(sparseX)) sparseX <- logical(0)
@@ -321,6 +323,32 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
     condReStruc <- with(condList, getReStruc(reTrms, ss, aa, reXterms, fr, fc_list[[1]]))
     ziReStruc <- with(ziList, getReStruc(reTrms, ss, aa, reXterms, fr, fc_list[[2]]))
     dispReStruc <- with(dispList, getReStruc(reTrms, ss, aa, reXterms, fr, fc_list[[3]]))
+
+    hasXAr1 <- any(vapply(condReStruc,
+                            function(x) x$blockCode %in% .valid_covstruct[c("unxar1", "homcsxar1")],
+                            FUN.VALUE = logical(1)))
+    sameForm <- function(x, y) isTRUE(all.equal(x, y))
+    if (hasXAr1) {
+        if (family$family == "gaussian") {
+            if (!sameForm(dispformula.orig, ~0)) {
+                if (sameForm(dispformula.orig, ~1)) {
+                    warning("A Gaussian model with a separable member-by-time covariance term and a non-zero dispersion model estimates a separable latent covariance process plus independent residual/nugget variance. If your goal is a pure residual member x AR1 covariance structure, set dispformula = ~0.",
+                            call. = FALSE)
+                } else {
+                    warning("You specified a Gaussian separable member-by-time covariance term together with a structured dispersion model. This estimates covariate-specific independent nugget variance in addition to the separable covariance structure. This is valid if intentional, but it is not a pure separable residual covariance model. Use dispformula = ~0 for the pure member x AR1 structure.",
+                            call. = FALSE)
+                }
+            }
+        } else if (!usesDispersion(family$family)) {
+            if (dispformulaSpecified && !sameForm(dispformula.orig, ~1)) {
+                warning("The selected family has no estimated dispersion parameter, so dispformula is ignored by glmmTMB. The separable member-by-time covariance term is still included and remains interpretable as a latent Gaussian structured random effect on the link scale.",
+                        call. = FALSE)
+            }
+        } else if (dispformulaSpecified && !sameForm(dispformula.orig, ~1)) {
+            warning("You specified a separable member-by-time covariance term with a non-Gaussian family that has a family-specific dispersion parameter. Unlike Gaussian models, dispformula does not remove a Gaussian residual nugget; it changes the outcome distribution's dispersion model. Check that this is intended. The separable covariance term remains a latent Gaussian structured random effect on the link scale.",
+                    call. = FALSE)
+        }
+    }
     
     grpVar <- with(condList, getGrpVar(reTrms$flist))
 
@@ -1024,8 +1052,61 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
     }
 
     blkrank <- mapply(getRank, ss, aa)
-    
-    parFun <- function(struc, blksize, blkrank) {
+
+    xAr1 <- c("unxar1", "homcsxar1")
+
+    checkXAr1Coord <- function(struc, cnms) {
+        if (any(cnms == "(Intercept)")) {
+            stop(sprintf(
+                "%s() must be specified without an intercept, e.g. %s(membertime(member, time) + 0 | group). The random-effect columns must be one column per member-time coordinate.",
+                struc, struc), call. = FALSE)
+        }
+        coords <- tryCatch(parseNumLevels(cnms),
+                           error = function(e) {
+                               stop(sprintf(
+                                   "%s() requires two-dimensional member-time coordinates. Use e.g. %s(membertime(member, time) + 0 | group), or precompute dat$member_time <- glmmTMB::numFactor(dat$member, dat$time) and specify %s(member_time + 0 | group).",
+                                   struc, struc, struc), call. = FALSE)
+                           })
+        if (ncol(coords) != 2) {
+            stop(sprintf(
+                "%s() expects membertime(member, time) or numFactor(member, time) with exactly two coordinates: member first, discrete AR1 time second. The parsed coordinate factor has %d coordinate column(s).",
+                struc, ncol(coords)), call. = FALSE)
+        }
+        members0 <- coords[, 1]
+        times0 <- coords[, 2]
+        members <- sort(unique(members0))
+        times <- sort(unique(times0))
+        if (length(members) < 2) {
+            stop(sprintf(
+                "%s() requires at least two member levels in the first numFactor coordinate.",
+                struc), call. = FALSE)
+        }
+        fullgrid <- expand.grid(member = members, time = times)
+        fullgrid <- fullgrid[order(fullgrid$time, fullgrid$member), , drop = FALSE]
+        if (!identical(unname(coords), unname(as.matrix(fullgrid)))) {
+            stop(sprintf(
+                "%s() requires coordinate factor levels to form a complete member x time grid. Missing observed rows within groups are allowed, but the factor levels must include all intended member-time combinations. Use membertime(member, time) for complete observed grids. For globally missing cells, build levels from a full grid, e.g. full <- glmmTMB::numFactor(grid$member, grid$time); dat$member_time <- factor(as.character(glmmTMB::numFactor(dat$member, dat$time)), levels = levels(full)).",
+                struc), call. = FALSE)
+        }
+        if (length(times) < 2 || any(diff(times) != 1)) {
+            stop(sprintf(
+                "%s() v0.0.1 requires the second numFactor coordinate to be discrete unit-spaced time positions, e.g. 1, 2, ..., T. For irregular continuous time, use is not supported until the OU implementation.",
+                struc), call. = FALSE)
+        }
+        list(nmember = length(members),
+             ntime = length(times),
+             members = match(members0, members),
+             times = match(times0, times))
+    }
+
+    xAr1Info <- vector("list", length(ss))
+    for (i in seq_along(ss)) {
+        if (ss[i] %in% xAr1) {
+            xAr1Info[[i]] <- checkXAr1Coord(ss[i], reTrms$cnms[[i]])
+        }
+    }
+
+    parFun <- function(struc, blksize, blkrank, xinfo) {
         switch(as.character(struc),
                "diag" = blksize, # (heterogenous) diag
                "us" = blksize * (blksize+1) / 2,
@@ -1043,10 +1124,12 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
                "homcs" = 2,
                "homtoep" = blksize,
                "equalto" = blksize * (blksize+1) / 2, #equalto (same as us)
+               "unxar1" = xinfo$nmember + xinfo$nmember * (xinfo$nmember - 1) / 2 + 1,
+               "homcsxar1" = 3,
                stop(sprintf("undefined number of parameters for covstruct '%s'", struc))
                )
     }
-    blockNumTheta <- mapply(parFun, ss, blksize, blkrank, SIMPLIFY=FALSE)
+    blockNumTheta <- mapply(parFun, ss, blksize, blkrank, xAr1Info, SIMPLIFY=FALSE)
 
     covCode <- .valid_covstruct[ss]
 
@@ -1069,6 +1152,11 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
             if (length(.getXlevels(reXterms[[i]],fr))!=1) {
                 stop(paste0(ss[i], "() expects a single, factor variable as the time component"))
             }
+        } else if(ss[i] %in% xAr1) {
+            tmp$sepNumMembers <- xAr1Info[[i]]$nmember
+            tmp$sepNumTimes <- xAr1Info[[i]]$ntime
+            tmp$sepMembers <- xAr1Info[[i]]$members
+            tmp$sepTimes <- xAr1Info[[i]]$times
         } else if(ss[i] == "ou") {
             times <- parseNumLevels(reTrms$cnms[[i]])
             if (ncol(times) != 1)
@@ -1184,6 +1272,8 @@ binomialType <- function(x) {
 ##' \item \code{homdiag} (diagonal, homogeneous variance)
 ##' \item \code{propto} (* proportional to user-specified variance-covariance matrix)
 ##' \item \code{equalto} (* equal to user-specified variance-covariance matrix)
+##' \item \code{unxar1} (* separable unstructured member by AR(1) time covariance)
+##' \item \code{homcsxar1} (* separable homogeneous compound-symmetry member by AR(1) time covariance)
 ##' }
 ##' Structures marked with * are experimental/untested. See \code{vignette("covstruct", package = "glmmTMB")} for more information.
 ##' \item For backward compatibility, the \code{family} argument can also be specified as a list comprising the name of the distribution and the link function (e.g. \code{list(family="binomial", link="logit")}). However, \strong{this alternative is now deprecated}; it produces a warning and will be removed at some point in the future. Furthermore, certain capabilities such as Pearson residuals or predictions on the data scale will only be possible if components such as \code{variance} and \code{linkfun} are present, see \code{\link{family}}.
@@ -1460,6 +1550,8 @@ glmmTMB <- function(
         }
     }
 
+    dispformulaSpecified <- "dispformula" %in% names(mc)
+
     TMBStruc <-
         mkTMBStruc(formula, ziformula, dispformula,
                    combForm,
@@ -1477,7 +1569,8 @@ glmmTMB <- function(
                    map=map,
                    sparseX=sparseX,
                    control=control,
-                   priors = priors)
+                   priors = priors,
+                   dispformulaSpecified = dispformulaSpecified)
 
     ## Allow for adaptive control parameters
     TMBStruc$control <- lapply(control, eval, envir = TMBStruc)
@@ -2298,9 +2391,10 @@ print.summary.glmmTMB <- function(x, digits = max(3, getOption("digits") - 3),
         for (nn in names(x$varcor[whichRE])) {
             cat("\n",cNames[[nn]],":\n",sep="")
             ## lme4:::.prt.VC is not quite what we want here
-            print(formatVC(x$varcor[[nn]],
+            print(formatVC.glmmTMB(x$varcor[[nn]],
                            digits = digits,
-                           comp = ranef.comp),
+                           comp = ranef.comp,
+                           compactXAr1 = TRUE),
                   quote=FALSE, digits=digits)
             ## FIXME: redundant nobs output
             .prt.grps(x$ngrps[[nn]],nobs=x$nobs)

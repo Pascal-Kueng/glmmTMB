@@ -29,7 +29,8 @@ mkTMBStruc(
   sparseX = NULL,
   control = glmmTMBControl(),
   old_smooths = NULL,
-  priors = NULL
+  priors = NULL,
+  dispformulaSpecified = FALSE
 )
 }
 \arguments{
@@ -81,6 +82,8 @@ mkTMBStruc(
 from an existing model. A list of smooths for each model component; each smooth has sm and re elements}
 
 \item{priors}{see \code{\link{priors}}}
+
+\item{dispformulaSpecified}{whether the user supplied \code{dispformula} explicitly}
 }
 \description{
 Extract info from formulas, reTrms, etc., format for TMB

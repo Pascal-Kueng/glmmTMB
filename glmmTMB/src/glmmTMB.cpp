@@ -94,7 +94,9 @@ enum valid_covStruct {
   hetar1_covstruct = 12,
   homcs_covstruct = 13,
   homtoep_covstruct = 14,
-  equalto_covstruct = 15
+  equalto_covstruct = 15,
+  unxar1_covstruct = 16,
+  homcsxar1_covstruct = 17
 };
 
 // should probably be named just 'predictCode';
@@ -309,6 +311,10 @@ struct per_term_info {
   int fullCor;       // Compute/store full correlation matrix?
   matrix<Type> dist;
   vector<Type> times;// For ar1 case
+  int sepNumMembers;
+  int sepNumTimes;
+  vector<Type> sepMembers;
+  vector<Type> sepTimes;
   // Report output
   matrix<Type> corr;
   vector<Type> sd;
@@ -333,11 +339,32 @@ struct terms_t : vector<per_term_info<Type> > {
       (*this)(i).blockNumTheta = blockNumTheta;
       (*this)(i).simCode = simCode;
       (*this)(i).fullCor = fullCor;
+      (*this)(i).sepNumMembers = 0;
+      (*this)(i).sepNumTimes = 0;
       // Optionally, pass time vector:
       SEXP t = getListElement(y, "times");
       if(!Rf_isNull(t)){
 	RObjectTestExpectedType(t, &Rf_isNumeric, "times");
 	(*this)(i).times = asVector<Type>(t);
+      }
+      // Optionally, pass separable member/time coordinate metadata:
+      SEXP snm = getListElement(y, "sepNumMembers");
+      if(!Rf_isNull(snm)){
+        (*this)(i).sepNumMembers = (int) REAL(snm)[0];
+      }
+      SEXP snt = getListElement(y, "sepNumTimes");
+      if(!Rf_isNull(snt)){
+        (*this)(i).sepNumTimes = (int) REAL(snt)[0];
+      }
+      SEXP sm = getListElement(y, "sepMembers");
+      if(!Rf_isNull(sm)){
+        RObjectTestExpectedType(sm, &Rf_isNumeric, "sepMembers");
+        (*this)(i).sepMembers = asVector<Type>(sm);
+      }
+      SEXP st = getListElement(y, "sepTimes");
+      if(!Rf_isNull(st)){
+        RObjectTestExpectedType(st, &Rf_isNumeric, "sepTimes");
+        (*this)(i).sepTimes = asVector<Type>(st);
       }
       // Optionally, pass distance matrix:
       SEXP d = getListElement(y, "dist");
@@ -590,6 +617,80 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
       }
     } // DISABLE_AD 
   } // [het]ar1_covstruct
+  else if (term.blockCode == unxar1_covstruct ||
+           term.blockCode == homcsxar1_covstruct) {
+    // case: separable member x AR(1) covariance
+    int n = term.blockSize;
+    int nm = term.sepNumMembers;
+    int nt = term.sepNumTimes;
+    if (n != nm * nt)
+      error("separable AR1 block size does not match member x time dimensions.");
+    if (term.sepMembers.size() != n || term.sepTimes.size() != n)
+      error("separable AR1 coordinate metadata has wrong length.");
+
+    matrix<Type> member_corr(nm, nm);
+    vector<Type> sd_member(nm);
+    Type phi;
+
+    if (term.blockCode == unxar1_covstruct) {
+      vector<Type> logsd = theta.head(nm);
+      vector<Type> corr_transf = theta.segment(nm, nm * (nm - 1) / 2);
+      Type corr_transf_time = theta(theta.size() - 1);
+      density::UNSTRUCTURED_CORR_t<Type> member_nldens(corr_transf);
+      member_corr = member_nldens.cov();
+      sd_member = exp(logsd);
+      phi = corr_transf_time / sqrt(Type(1.0) + pow(corr_transf_time, 2));
+    } else {
+      Type sd = exp(theta(0));
+      Type corr_transf_member = theta(1);
+      Type corr_transf_time = theta(2);
+      Type a = Type(1) / (Type(nm) - Type(1));
+      Type rho = invlogit(corr_transf_member) * (Type(1) + a) - a;
+      for (int i = 0; i < nm; i++) {
+        sd_member(i) = sd;
+        for (int j = 0; j < nm; j++)
+          member_corr(i,j) = (i == j ? Type(1) : rho);
+      }
+      phi = corr_transf_time / sqrt(Type(1.0) + pow(corr_transf_time, 2));
+    }
+
+    vector<Type> sd(n);
+    matrix<Type> corr(n,n);
+    for (int i = 0; i < n; i++) {
+      int mi = (int) asDouble(term.sepMembers(i)) - 1;
+      int ti = (int) asDouble(term.sepTimes(i)) - 1;
+      sd(i) = sd_member(mi);
+      for (int j = 0; j < n; j++) {
+        int mj = (int) asDouble(term.sepMembers(j)) - 1;
+        int tj = (int) asDouble(term.sepTimes(j)) - 1;
+        int lag = (ti > tj ? ti - tj : tj - ti);
+        corr(i,j) = member_corr(mi,mj) * pow(phi, lag);
+      }
+    }
+
+    density::MVNORM_t<Type> nldens(corr);
+    density::VECSCALE_t<density::MVNORM_t<Type> > scnldens = density::VECSCALE(nldens, sd);
+    for(int i = 0; i < term.blockReps; i++){
+      ans += scnldens(U.col(i));
+      if (do_simulate) {
+        switch(term.simCode) {
+        case fix_simcode:
+          break;
+        case zero_simcode:
+          for (int j=0; j < U.rows(); j++) {
+            U(j,i) = Type(0);
+          };
+          break;
+        case random_simcode:
+          U.col(i) = sd * nldens.simulate();
+          break;
+        default: error ("unknown simcode");
+        }
+      }
+    }
+    SET_COR;
+    term.sd = sd;
+  }
   else if (term.blockCode == ou_covstruct){
     // case: ou_covstruct
     //  * NOTE: this is the continuous time version of ar1.

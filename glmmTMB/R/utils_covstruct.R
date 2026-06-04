@@ -29,6 +29,9 @@
 ##' ## parseNumLevels( colnames(model.matrix( ~f )) )
 ##' ## Error: 'Failed to parse numeric levels: (Intercept)'
 ##' parseNumLevels( colnames(model.matrix( ~ f-1 )) )
+##' ## member/time helper for product covariance structures
+##' membertime(factor(c("A", "B", "A", "B")), c(1, 1, 2, 2))
+##' mt(factor(c("A", "B", "A", "B")), c(1, 1, 2, 2))
 ##' @export
 numFactor <- function(x, ...) {
     y <- data.frame(x, ...)
@@ -48,6 +51,32 @@ numFactor <- function(x, ...) {
     facLevels <- asChar(y0)
     factor( fac, levels = facLevels )
 }
+
+##' @rdname numFactor
+##' @param member member or role coordinate for member-by-time covariance structures
+##' @param time discrete time coordinate for member-by-time covariance structures
+##' @details \code{membertime} is a convenience wrapper for creating two-dimensional
+##' coordinate factors for product covariance structures such as
+##' \code{homcsxar1} and \code{unxar1}. It stores the first coordinate as the
+##' member/role index and the second coordinate as the time index.
+##' @export
+membertime <- function(member, time) {
+    coord <- function(x, time = FALSE) {
+        if (is.factor(x)) {
+            if (time) {
+                xx <- suppressWarnings(as.numeric(as.character(x)))
+                if (!anyNA(xx)) return(xx)
+            }
+            return(as.numeric(x))
+        }
+        x
+    }
+    numFactor(coord(member), coord(time, time = TRUE))
+}
+
+##' @rdname numFactor
+##' @export
+mt <- membertime
 
 ##' @rdname numFactor
 ##' @param levels Character vector to parse into numeric values.
@@ -70,4 +99,3 @@ parseNumLevels <- function(levels) {
     }
     ans
 }
-

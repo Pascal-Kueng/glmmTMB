@@ -725,7 +725,16 @@ print.glmmTMB <-
   ## varcorr
   if (!all(sapply(vc <- VarCorr(x),is.null))) {
       cat("Random-effects (co)variances:\n")
-      print(VarCorr(x), digits=digits, comp = ranef.comp)
+      for (nn in names(vc)) {
+          if (!is.null(vc[[nn]])) {
+              cat(sprintf("\n%s:\n", cNames[[nn]]))
+              print(formatVC.glmmTMB(vc[[nn]],
+                                     digits = digits,
+                                     comp = ranef.comp,
+                                     compactXAr1 = TRUE),
+                    quote = FALSE)
+          }
+      }
   }
   ## ngroups
   gvec <- list(obs=sprintf("\nNumber of obs: %d",nobs(x)))

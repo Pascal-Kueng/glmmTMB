@@ -2,10 +2,16 @@
 % Please edit documentation in R/utils_covstruct.R
 \name{numFactor}
 \alias{numFactor}
+\alias{membertime}
+\alias{mt}
 \alias{parseNumLevels}
 \title{Factor with numeric interpretable levels.}
 \usage{
 numFactor(x, ...)
+
+membertime(member, time)
+
+mt(member, time)
 
 parseNumLevels(levels)
 }
@@ -15,6 +21,10 @@ coordinates.}
 
 \item{...}{Additional vectors, matrices or data.frames that
 constitute the coordinates.}
+
+\item{member}{member or role coordinate for member-by-time covariance structures}
+
+\item{time}{discrete time coordinate for member-by-time covariance structures}
 
 \item{levels}{Character vector to parse into numeric values.}
 }
@@ -33,6 +43,11 @@ original numeric coordinates are recoverable without loss of
 precision using the function \code{parseNumLevels}.  Factor levels
 are sorted coordinate wise from left to right: first coordinate is
 fastest running.
+
+\code{membertime} is a convenience wrapper for creating two-dimensional
+coordinate factors for product covariance structures such as
+\code{homcsxar1} and \code{unxar1}. It stores the first coordinate as the
+member/role index and the second coordinate as the time index.
 }
 \examples{
 ## 1D example
@@ -46,4 +61,7 @@ model.matrix( ~f )
 ## parseNumLevels( colnames(model.matrix( ~f )) )
 ## Error: 'Failed to parse numeric levels: (Intercept)'
 parseNumLevels( colnames(model.matrix( ~ f-1 )) )
+## member/time helper for product covariance structures
+membertime(factor(c("A", "B", "A", "B")), c(1, 1, 2, 2))
+mt(factor(c("A", "B", "A", "B")), c(1, 1, 2, 2))
 }

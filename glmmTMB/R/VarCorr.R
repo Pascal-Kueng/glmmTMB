@@ -259,3 +259,129 @@ print.VarCorr.glmmTMB <- function(x, digits = max(3, getOption("digits") - 2),
   }
   invisible(x)
 }
+
+xar1_block_names <- c("unxar1", "homcsxar1")
+
+is_xar1_vcmat <- function(x) {
+    bc <- attr(x, "blockCode")
+    !is.null(bc) && names(bc)[1] %in% xar1_block_names
+}
+
+xar1_term_label <- function(x) {
+    term <- sub("\\([^()]*\\)$", "", x)
+    helper <- regexec("^(?:(?:glmmTMB::)?)(?:membertime|mt)\\((.*)\\)$", term)
+    parts <- regmatches(term, helper)[[1]]
+    if (length(parts) == 2) {
+        args <- trimws(strsplit(parts[2], ",", fixed = TRUE)[[1]])
+        args <- trimws(sub("^[[:alnum:]_.]+[[:space:]]*=[[:space:]]*", "", args))
+        if (length(args) >= 2) return(paste(args[1], "x", args[2]))
+    }
+    term
+}
+
+formatVC.glmmTMB <- function(x, digits = max(3, getOption("digits") - 2),
+                             comp = "Std.Dev.", formatter = format,
+                             maxdim = 10, compactXAr1 = FALSE) {
+    if (!compactXAr1 || !any(vapply(x, is_xar1_vcmat, logical(1)))) {
+        return(formatVC(x, digits = digits, comp = comp,
+                        formatter = formatter, maxdim = maxdim))
+    }
+    ff <- function(z) formatter(z, digits = digits)
+    empty_row <- function() setNames(rep("", length(c("Groups", "Name", comp, "Corr"))),
+                                     c("Groups", "Name", comp, "Corr"))
+    fmt_comp <- function(sd) {
+        ans <- setNames(rep("", length(comp)), comp)
+        if ("Variance" %in% comp) ans["Variance"] <- ff(sd^2)
+        if ("Std.Dev." %in% comp) ans["Std.Dev."] <- ff(sd)
+        ans
+    }
+    pos <- function(coords, member, time) {
+        which(coords[, 1] == member & coords[, 2] == time)[1]
+    }
+    format_xar1 <- function(z, group) {
+        bc <- names(attr(z, "blockCode"))[1]
+        sd <- attr(z, "stddev")
+        cor <- attr(z, "correlation")
+        coords <- parseNumLevels(names(sd))
+        members <- sort(unique(coords[, 1]))
+        times <- sort(unique(coords[, 2]))
+        term <- xar1_term_label(names(sd)[1])
+        first_time <- times[1]
+        first_member <- members[1]
+        row_list <- list()
+
+        member_pos <- vapply(members, function(m) pos(coords, m, first_time), integer(1))
+        if (bc == "homcsxar1") {
+            rr <- empty_row()
+            rr["Groups"] <- group
+            rr["Name"] <- paste0(term, " member")
+            rr[comp] <- fmt_comp(sd[member_pos[1]])
+            if (length(members) > 1) {
+                rho <- cor[member_pos[1], member_pos[2]]
+                rr["Corr"] <- paste(ff(rho), "(homcs)")
+            }
+            row_list[[length(row_list) + 1]] <- rr
+        } else {
+            for (i in seq_along(members)) {
+                rr <- empty_row()
+                if (i == 1) rr["Groups"] <- group
+                rr["Name"] <- paste0(term, " member ", members[i])
+                rr[comp] <- fmt_comp(sd[member_pos[i]])
+                if (i > 1) {
+                    rr["Corr"] <- paste(ff(cor[member_pos[i], member_pos[seq_len(i - 1)]]),
+                                        collapse = " ")
+                }
+                row_list[[length(row_list) + 1]] <- rr
+            }
+        }
+
+        if (length(times) > 1) {
+            phi <- cor[pos(coords, first_member, times[1]),
+                       pos(coords, first_member, times[2])]
+            rr <- empty_row()
+            rr["Name"] <- paste0(term, " time lag 1")
+            rr["Corr"] <- paste(ff(phi), "(ar1)")
+            row_list[[length(row_list) + 1]] <- rr
+
+            if (length(members) > 1) {
+                pairs <- utils::combn(members, 2)
+                for (j in seq_len(ncol(pairs))) {
+                    rr <- empty_row()
+                    rr["Name"] <- paste0(term, " members ",
+                                         pairs[1, j], ":", pairs[2, j],
+                                         " lag 1")
+                    rr["Corr"] <- paste(
+                        ff(cor[pos(coords, pairs[1, j], times[1]),
+                               pos(coords, pairs[2, j], times[2])]),
+                        "(xar1)")
+                    row_list[[length(row_list) + 1]] <- rr
+                }
+            }
+        }
+        do.call(rbind, row_list)
+    }
+    rows <- list()
+    for (i in seq_along(x)) {
+        xi <- x[[i]]
+        if (is_xar1_vcmat(xi)) {
+            rows[[length(rows) + 1]] <- format_xar1(xi, names(x)[i])
+        } else {
+            xx <- x[i]
+            attr(xx, "useSc") <- FALSE
+            rows[[length(rows) + 1]] <- formatVC(xx, digits = digits,
+                                                 comp = comp,
+                                                 formatter = formatter,
+                                                 maxdim = maxdim)
+        }
+    }
+    if (isTRUE(attr(x, "useSc"))) {
+        rr <- empty_row()
+        rr["Groups"] <- "Residual"
+        rr[comp] <- fmt_comp(attr(x, "sc"))
+        rows[[length(rows) + 1]] <- matrix(rr, nrow = 1,
+                                           dimnames = list(NULL, names(rr)))
+    }
+    ans <- do.call(rbind, rows)
+    rownames(ans) <- rep("", nrow(ans))
+    ans
+}

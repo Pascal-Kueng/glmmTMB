@@ -49,7 +49,9 @@
   hetar1 = 12,
   homcs = 13,
   homtoep = 14,
-  equalto = 15
+  equalto = 15,
+  unxar1 = 16,
+  homcsxar1 = 17
 )
 .valid_zipredictcode <- c(
   corrected = 0,
