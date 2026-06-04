@@ -34,6 +34,7 @@ mk_pop_pred <- function(re.form) {
 ##' @export fixef
 ##' @export
 fixef.glmmTMB <- function(object, ...) {
+
   pl <- object$obj$env$parList(object$fit$par, object$fit$parfull)
   X <- Map(function(m) getME(object, paste0("X", m)), c("", "zi", "disp"))
 
