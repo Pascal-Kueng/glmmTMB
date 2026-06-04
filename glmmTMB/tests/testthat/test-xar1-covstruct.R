@@ -220,6 +220,24 @@ test_that("xar1 structures print compactly for model and summary", {
     expect_true(any(grepl("mt\\(1,3\\)", v1)))
 })
 
+test_that("xar1 compact output combines with ordinary random effects", {
+    dd <- mk_xar1_dat(ng = 20)
+    dd$Idiff <- ifelse(dd$member == 1, -1, 1)
+    dd$member_pos <- factor(dd$Idiff, levels = c(-1, 1),
+                            labels = c("member_minus", "member_plus"))
+
+    m1 <- suppressWarnings(
+        glmmTMB(y ~ 1 + (1 | group) + (0 + Idiff | group) +
+                    homcsxar1(mt(member_pos, time) + 0 | group),
+                data = dd, dispformula = ~0))
+    p1 <- capture.output(print(m1))
+    s1 <- capture.output(print(summary(m1)))
+    expect_true(any(grepl("(Intercept)", p1, fixed = TRUE)))
+    expect_true(any(grepl("Idiff", p1, fixed = TRUE)))
+    expect_true(any(grepl("member_pos x time member", p1, fixed = TRUE)))
+    expect_true(any(grepl("member_pos x time member", s1, fixed = TRUE)))
+})
+
 test_that("inline membertime labels print as member x time", {
     dd <- mk_xar1_dat(ng = 20)
     dd$role <- factor(dd$member, labels = c("A", "B"))

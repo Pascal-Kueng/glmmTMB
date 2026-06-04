@@ -1,0 +1,124 @@
+---
+title: "TestDyadicModels"
+author: "Pascal Küng"
+date: "2026-06-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(glmmTMB)
+library(tidyverse)
+library(bmlm)
+
+source('PrepareDyadicData.R')
+
+```
+
+Issue: 
+
+```{r}
+
+load('Merged_Dataset_long.rda')
+
+dat <- df_merged %>%
+  rename(
+    closeness = daily_ss_closeness,
+    mood = daily_ss_affect1,
+    gender = baseline_gender_option
+  ) %>%
+  
+  select(
+    userID,
+    coupleID,
+    diaryday,
+    closeness, 
+    mood,
+    gender
+  ) %>%
+  
+  group_by(userID) %>%
+  mutate(
+    closeness_pm = mean(closeness, na.rm = TRUE)
+  ) %>% 
+  ungroup() %>%
+  mutate(
+    closeness_gm = mean(closeness_pm, na.rm = TRUE),
+    closeness_cw = closeness - closeness_pm, 
+    closeness_cb= closeness_pm - closeness_gm
+  )
+  
+```
+
+
+```{r}
+
+dyads <- reshape_dyadic_data(
+  dat,
+  person_id = 'userID',
+  dyad_id = 'coupleID', 
+  vars_to_reshape = c('gender', 'closeness_cw', 'closeness_cb'),
+  time_var = 'diaryday'
+)
+
+dyads <- finalize_dyadic_data(
+  dyads,
+  group_definitions = list(
+    gender_actor == 1 ~ 'male',
+    gender_actor == 2 ~ 'female'
+  ),
+  wb_center = FALSE
+)
+
+```
+
+Introducing contrast coding 
+
+```{r}
+set.seed(1)
+
+dyads <- dyads %>%
+  group_by(coupleID) %>%
+  mutate(
+    base = ifelse(userID == min(userID), 1, -1),
+    flip = 1 - 2 * rbinom(1, 1, 0.5),   # yields +1 or -1 once per couple
+    Idiff = base * flip,
+    member_pos = factor(
+      Idiff,
+      levels = c(-1, 1),
+      labels = c("member_minus", "member_plus")
+    )
+  ) %>%
+  ungroup() %>%
+  relocate(Idiff, .after = coupleID) %>%
+  relocate(member_pos, .after = Idiff) %>%
+  dplyr::select(-base, -flip)
+
+```
+
+
+## Exchangeable Dyads
+
+```{r}
+
+m1_exchangeable <- glmmTMB(
+  mood ~ 1 + diaryday 
+  + closeness_cw_actor + closeness_cw_partner 
+  + closeness_cb_actor + closeness_cb_partner
+  
+  + (1 | coupleID)
+  + (0 + Idiff | coupleID)
+  
+  + homcsxar1(mt(member_pos, diaryday) + 0 | coupleID)
+  
+  , dispformula = ~ 0
+  , data = dyads
+)
+
+summary(m1_exchangeable)
+
+```
+
+
+# 

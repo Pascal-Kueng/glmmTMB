@@ -399,6 +399,17 @@ formatVC.glmmTMB <- function(x, digits = max(3, getOption("digits") - 2),
         rows[[length(rows) + 1]] <- matrix(rr, nrow = 1,
                                            dimnames = list(NULL, names(rr)))
     }
+    max_cols <- max(vapply(rows, ncol, integer(1)))
+    col_names <- colnames(rows[[which.max(vapply(rows, ncol, integer(1)))]])
+    pad_cols <- function(m) {
+        if (ncol(m) < max_cols) {
+            extra <- matrix("", nrow = nrow(m), ncol = max_cols - ncol(m))
+            m <- cbind(m, extra)
+        }
+        colnames(m) <- col_names
+        m
+    }
+    rows <- lapply(rows, pad_cols)
     ans <- do.call(rbind, rows)
     rownames(ans) <- rep("", nrow(ans))
     ans
