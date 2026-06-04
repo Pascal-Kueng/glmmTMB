@@ -159,6 +159,25 @@ mkVC <- function(cor, sd, cnms, sc, bc, useSc) {
     ss
 }
 
+xar1_block_names <- c("unxar1", "homcsxar1")
+
+is_xar1_vcmat <- function(x) {
+    bc <- attr(x, "blockCode")
+    !is.null(bc) && names(bc)[1] %in% xar1_block_names
+}
+
+xar1_term_label <- function(x) {
+    term <- sub("\\([^()]*\\)$", "", x)
+    helper <- regexec("^(?:(?:glmmTMB::)?)(?:membertime|mt)\\((.*)\\)$", term)
+    parts <- regmatches(term, helper)[[1]]
+    if (length(parts) == 2) {
+        args <- trimws(strsplit(parts[2], ",", fixed = TRUE)[[1]])
+        args <- trimws(sub("^[[:alnum:]_.]+[[:space:]]*=[[:space:]]*", "", args))
+        if (length(args) >= 2) return(paste(args[1], "x", args[2]))
+    }
+    term
+}
+
 ##' Extract variance and correlation components
 ##'
 ##' @aliases VarCorr
@@ -211,6 +230,12 @@ VarCorr.glmmTMB <- function(x, sigma = 1, ... )
     comp_nms2 <- c("cond", "zi", "disp")
     corr_list <- vector(mode="list", length=length(comp_nms2))
     names(corr_list) <- comp_nms2
+    get_member_labels <- function(term) {
+        nm <- sub("\\([^()]*\\)$", "", term[1])
+        if (is.null(x$frame)) return(NULL)
+        if (!nm %in% names(x$frame)) return(NULL)
+        attr(x$frame[[nm]], "memberLabels")
+    }
 
     for (i in seq_along(comp_nms)) {
         restruc <- reS[[paste0(comp_nms2[i],  "ReStruc")]]
@@ -225,6 +250,9 @@ VarCorr.glmmTMB <- function(x, sigma = 1, ... )
                        useSc = useSc)
             for (j in seq_along(vc)) {
                 attr(vc[[j]],"blockCode") <- bcvec[[j]]
+                if (names(bcvec[[j]]) %in% xar1_block_names) {
+                    attr(vc[[j]], "memberLabels") <- get_member_labels(cn[[j]])
+                }
                 class(vc[[j]]) <- c(paste0("vcmat_", names(bcvec[[j]])), class(vc[[j]]))
             }
             corr_list[[comp_nms2[[i]]]] <- vc
@@ -260,25 +288,6 @@ print.VarCorr.glmmTMB <- function(x, digits = max(3, getOption("digits") - 2),
   invisible(x)
 }
 
-xar1_block_names <- c("unxar1", "homcsxar1")
-
-is_xar1_vcmat <- function(x) {
-    bc <- attr(x, "blockCode")
-    !is.null(bc) && names(bc)[1] %in% xar1_block_names
-}
-
-xar1_term_label <- function(x) {
-    term <- sub("\\([^()]*\\)$", "", x)
-    helper <- regexec("^(?:(?:glmmTMB::)?)(?:membertime|mt)\\((.*)\\)$", term)
-    parts <- regmatches(term, helper)[[1]]
-    if (length(parts) == 2) {
-        args <- trimws(strsplit(parts[2], ",", fixed = TRUE)[[1]])
-        args <- trimws(sub("^[[:alnum:]_.]+[[:space:]]*=[[:space:]]*", "", args))
-        if (length(args) >= 2) return(paste(args[1], "x", args[2]))
-    }
-    term
-}
-
 formatVC.glmmTMB <- function(x, digits = max(3, getOption("digits") - 2),
                              comp = "Std.Dev.", formatter = format,
                              maxdim = 10, compactXAr1 = FALSE) {
@@ -302,6 +311,7 @@ formatVC.glmmTMB <- function(x, digits = max(3, getOption("digits") - 2),
         bc <- names(attr(z, "blockCode"))[1]
         sd <- attr(z, "stddev")
         cor <- attr(z, "correlation")
+        member_labels <- attr(z, "memberLabels")
         coords <- parseNumLevels(names(sd))
         members <- sort(unique(coords[, 1]))
         times <- sort(unique(coords[, 2]))
@@ -309,6 +319,13 @@ formatVC.glmmTMB <- function(x, digits = max(3, getOption("digits") - 2),
         first_time <- times[1]
         first_member <- members[1]
         row_list <- list()
+        member_name <- function(m) {
+            if (!is.null(member_labels)) {
+                lab <- member_labels[as.character(m)]
+                if (!is.na(lab)) return(unname(lab))
+            }
+            as.character(m)
+        }
 
         member_pos <- vapply(members, function(m) pos(coords, m, first_time), integer(1))
         if (bc == "homcsxar1") {
@@ -325,7 +342,7 @@ formatVC.glmmTMB <- function(x, digits = max(3, getOption("digits") - 2),
             for (i in seq_along(members)) {
                 rr <- empty_row()
                 if (i == 1) rr["Groups"] <- group
-                rr["Name"] <- paste0(term, " member ", members[i])
+                rr["Name"] <- paste0(term, " ", member_name(members[i]))
                 rr[comp] <- fmt_comp(sd[member_pos[i]])
                 if (i > 1) {
                     rr["Corr"] <- paste(ff(cor[member_pos[i], member_pos[seq_len(i - 1)]]),
@@ -348,7 +365,8 @@ formatVC.glmmTMB <- function(x, digits = max(3, getOption("digits") - 2),
                 for (j in seq_len(ncol(pairs))) {
                     rr <- empty_row()
                     rr["Name"] <- paste0(term, " members ",
-                                         pairs[1, j], ":", pairs[2, j],
+                                         member_name(pairs[1, j]), ":",
+                                         member_name(pairs[2, j]),
                                          " lag 1")
                     rr["Corr"] <- paste(
                         ff(cor[pos(coords, pairs[1, j], times[1]),

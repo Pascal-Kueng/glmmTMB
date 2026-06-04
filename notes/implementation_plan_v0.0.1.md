@@ -20,6 +20,8 @@ For Gaussian models, `dispformula = ~0` gives the pure separable residual covari
 
 `homcsxar1()` is the clean v0.0.1 structure for exchangeable/indistinguishable dyads. It estimates one member SD, one same-time member correlation, and one AR(1) time parameter.
 
+For `homcsxar1()`, the first `membertime()` coordinate is an exchangeable member-position index. Labels may be arbitrary, but they must be stable within group across time so the AR(1) margin follows the same individual. If the mean model uses `Idiff`, use the same stable member assignment for `membertime()`. v0.0.1 should warn about this.
+
 `unxar1()` is a useful but restricted distinguishable-dyad structure. It estimates role/member-specific SDs and an unstructured same-time member correlation matrix, but it still imposes one common AR(1) parameter across roles:
 
 ```text
@@ -246,7 +248,7 @@ Also add warning orchestration after conditional `condReStruc` is constructed:
 
 Warning behavior:
 
-- Gaussian + `dispformula = ~0`: no warning.
+- Gaussian + `dispformula = ~0`: no dispersion warning. `homcsxar1()` may still warn about stable exchangeable member-position assignment.
 - Gaussian + `dispformula != ~0`: warn that the model estimates separable latent/residual covariance plus independent nugget variance; suggest `dispformula = ~0` for pure separable residual covariance.
 - Gaussian + structured dispersion formula such as `~ 0 + role`: use a more specific warning that this is role-/covariate-specific nugget variance.
 - Families without dispersion (`binomial`, `poisson`, `truncated_poisson`, `bell`): warn only if the user supplies a non-default/non-trivial `dispformula`; note that `dispformula` is ignored and the separable term remains a latent Gaussian random effect.

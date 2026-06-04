@@ -327,8 +327,15 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
     hasXAr1 <- any(vapply(condReStruc,
                             function(x) x$blockCode %in% .valid_covstruct[c("unxar1", "homcsxar1")],
                             FUN.VALUE = logical(1)))
+    hasHomcsXAr1 <- any(vapply(condReStruc,
+                               function(x) x$blockCode %in% .valid_covstruct["homcsxar1"],
+                               FUN.VALUE = logical(1)))
     sameForm <- function(x, y) isTRUE(all.equal(x, y))
     if (hasXAr1) {
+        if (hasHomcsXAr1) {
+            warning("homcsxar1() treats the first membertime() coordinate as exchangeable member positions. These labels may be arbitrary, but they must identify the same individual within each group across time. If your mean model uses Idiff, use the same stable member assignment for membertime().",
+                    call. = FALSE)
+        }
         if (family$family == "gaussian") {
             if (!sameForm(dispformula.orig, ~0)) {
                 if (sameForm(dispformula.orig, ~1)) {

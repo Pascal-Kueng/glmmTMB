@@ -189,7 +189,7 @@ For exchangeable triads:
 \end{pmatrix}.
 \]
 
-The exchangeable/homogeneous-CS member margin is the correct model when group members are statistically indistinguishable and member labels are arbitrary.
+The exchangeable/homogeneous-CS member margin is the correct model when group members are statistically indistinguishable and member labels are arbitrary. However, arbitrary does not mean row-wise random: the first `membertime()` coordinate must identify the same individual within each group across time so the AR(1) margin follows each individual consistently.
 
 ### 4.4 Distinguishable and indistinguishable dyads in the same model
 
@@ -402,6 +402,7 @@ Important: keep `Idiff` and `member_in_dyad` conceptually separate.
 
 - `Idiff` is a signed contrast used in sum/difference random effects.
 - `member_in_dyad` is a coordinate index used in the covariance structure.
+- If `Idiff` is used in the mean/random-effects model, use the same stable member assignment for `membertime(member_in_dyad, diaryday)` so the mean-model difference coding and covariance coordinate refer to the same within-dyad positions.
 
 ### 6.2 Phase 2: priority distinguishable dyad extension with diagonal VAR(1)
 
@@ -686,7 +687,7 @@ The package should include interpretation warnings for `dispformula` when separa
 
 If `family = gaussian()` and a member-time product covariance term is present:
 
-- If `dispformula = ~ 0`: no warning.
+- If `dispformula = ~ 0`: no dispersion warning. `homcsxar1()` may still warn that exchangeable member-position labels must be stable within group over time.
 - If `dispformula` is missing/default `~ 1`: warn.
 - If `dispformula = ~ role` or any other non-zero dispersion model: warn, but acknowledge this can be appropriate if the user intentionally wants independent nugget/measurement-error variance.
 
@@ -847,7 +848,8 @@ The expected improvement of `var1diag()` over `unxar1()` is recovery of role-spe
 
 Add tests for warning behavior:
 
-- Gaussian + `unxar1()`/`homcsxar1()` + `dispformula = ~ 0`: no warning.
+- Gaussian + `unxar1()`/`homcsxar1()` + `dispformula = ~ 0`: no dispersion warning.
+- `homcsxar1()`: warning that exchangeable member-position labels may be arbitrary but must be stable within group across time.
 - Gaussian + `unxar1()`/`homcsxar1()` + missing/default dispersion: warning about nugget variance.
 - Gaussian + `unxar1()`/`homcsxar1()` + `dispformula = ~ role`: warning that this is a role-specific nugget and may be intentional.
 - Poisson/binomial + explicit `dispformula`: warning that `dispformula` is ignored but the separable term remains interpretable.
