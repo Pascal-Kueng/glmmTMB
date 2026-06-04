@@ -655,41 +655,84 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
     }
 
     vector<Type> sd(n);
-    matrix<Type> corr(n,n);
     for (int i = 0; i < n; i++) {
       int mi = (int) asDouble(term.sepMembers(i)) - 1;
-      int ti = (int) asDouble(term.sepTimes(i)) - 1;
       sd(i) = sd_member(mi);
+    }
+
+    density::MVNORM_t<Type> member_nldens(member_corr);
+    density::VECSCALE_t<density::MVNORM_t<Type> > sc_member_nldens =
+      density::VECSCALE(member_nldens, sd_member);
+    Type trans_scale = sqrt(Type(1.0) - phi * phi);
+    vector<Type> sd_member_trans(nm);
+    for (int i = 0; i < nm; i++)
+      sd_member_trans(i) = sd_member(i) * trans_scale;
+    density::VECSCALE_t<density::MVNORM_t<Type> > sc_member_trans_nldens =
+      density::VECSCALE(member_nldens, sd_member_trans);
+
+    vector<Type> yprev(nm);
+    vector<Type> ycur(nm);
+    vector<Type> innov(nm);
+
+    for(int i = 0; i < term.blockReps; i++){
+      switch(term.simCode) {
+      case fix_simcode:
+        break;
+      case zero_simcode:
+        if (do_simulate) {
+          for (int j=0; j < U.rows(); j++)
+            U(j,i) = Type(0);
+        }
+        break;
+      case random_simcode:
+        if (do_simulate) {
+          vector<Type> sim0 = sd_member * member_nldens.simulate();
+          for (int m = 0; m < nm; m++)
+            U(m,i) = sim0(m);
+          for (int t = 1; t < nt; t++) {
+            vector<Type> sim_innov = sd_member_trans * member_nldens.simulate();
+            for (int m = 0; m < nm; m++)
+              U(t * nm + m, i) = phi * U((t - 1) * nm + m, i) + sim_innov(m);
+          }
+        }
+        break;
+      default: error ("unknown simcode");
+      }
+
+      for (int m = 0; m < nm; m++)
+        yprev(m) = U(m, i);
+      ans += sc_member_nldens(yprev);
+      for (int t = 1; t < nt; t++) {
+        for (int m = 0; m < nm; m++) {
+          ycur(m) = U(t * nm + m, i);
+          innov(m) = ycur(m) - phi * yprev(m);
+        }
+        ans += sc_member_trans_nldens(innov);
+        for (int m = 0; m < nm; m++)
+          yprev(m) = ycur(m);
+      }
+    }
+
+    DISABLE_AD {
+      matrix<Type> corr(n,n);
+      for (int i = 0; i < n; i++) {
+        int mi = (int) asDouble(term.sepMembers(i)) - 1;
+        int ti = (int) asDouble(term.sepTimes(i)) - 1;
       for (int j = 0; j < n; j++) {
         int mj = (int) asDouble(term.sepMembers(j)) - 1;
         int tj = (int) asDouble(term.sepTimes(j)) - 1;
         int lag = (ti > tj ? ti - tj : tj - ti);
         corr(i,j) = member_corr(mi,mj) * pow(phi, lag);
       }
-    }
-
-    density::MVNORM_t<Type> nldens(corr);
-    density::VECSCALE_t<density::MVNORM_t<Type> > scnldens = density::VECSCALE(nldens, sd);
-    for(int i = 0; i < term.blockReps; i++){
-      ans += scnldens(U.col(i));
-      if (do_simulate) {
-        switch(term.simCode) {
-        case fix_simcode:
-          break;
-        case zero_simcode:
-          for (int j=0; j < U.rows(); j++) {
-            U(j,i) = Type(0);
-          };
-          break;
-        case random_simcode:
-          U.col(i) = sd * nldens.simulate();
-          break;
-        default: error ("unknown simcode");
-        }
       }
+      if (term.fullCor == 1) {
+        term.corr = corr;
+      } else {
+        term.corr.resize(1,1);
+        term.corr(0,0) = NAN;
+      }
+      term.sd = sd;
     }
-    SET_COR;
-    term.sd = sd;
   }
   else if (term.blockCode == ou_covstruct){
     // case: ou_covstruct

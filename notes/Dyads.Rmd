@@ -11,6 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(glmmTMB)
 library(tidyverse)
 library(bmlm)
+library(DHARMa)
 
 source('PrepareDyadicData.R')
 
@@ -107,8 +108,8 @@ m1_exchangeable <- glmmTMB(
   + closeness_cw_actor + closeness_cw_partner 
   + closeness_cb_actor + closeness_cb_partner
   
-  + (1 | coupleID)
-  + (0 + Idiff | coupleID)
+  + (1 + closeness_cw_actor + closeness_cw_partner | coupleID)
+  + (0 + Idiff + I(Idiff*closeness_cw_actor) + I(Idiff*closeness_cw_partner) | coupleID)
   
   + homcsxar1(mt(member_pos, diaryday) + 0 | coupleID)
   
@@ -121,4 +122,12 @@ summary(m1_exchangeable)
 ```
 
 
-# 
+```{r}
+
+latent_res <- DHARMa::simulateResiduals(
+  dharma_xar1(m1_exchangeable),
+  seed = 1
+)
+plot(latent_res)
+
+```

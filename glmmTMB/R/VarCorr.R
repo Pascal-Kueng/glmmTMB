@@ -3,6 +3,7 @@
 ##' @importFrom stats family
 ##' @export
 family.glmmTMB <- function(object, ...) {
+    if (!is.null(xar1_dharma_data(object))) return(gaussian())
     object$modelInfo$family
 }
 
