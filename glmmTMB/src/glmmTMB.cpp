@@ -105,7 +105,8 @@ enum separable_density_kind {
   // and us are both "dense correlation" margins in the current prototype.
   dense_corr_sep = 1,
   ar1_sep = 2,
-  diag_sep = 3
+  diag_sep = 3,
+  toep_sep = 5
 };
 
 enum separable_dispatch {
@@ -480,6 +481,10 @@ bool is_diag_margin(int code) {
   return code == diag_covstruct || code == homdiag_covstruct;
 }
 
+bool is_toep_margin(int code) {
+  return code == toep_covstruct || code == homtoep_covstruct;
+}
+
 template <class Type>
 matrix<Type> compound_symmetry_corr(int n, Type corr_transf) {
   Type a = Type(1) / (Type(n) - Type(1));
@@ -549,6 +554,36 @@ void parse_separable_diag_margin(int code, int n, const vector<Type>& theta,
     }
   }
   corr = identity_corr<Type>(n);
+}
+
+template <class Type>
+void parse_separable_toep_margin(int code, int n, const vector<Type>& theta,
+				 int& theta_pos, bool scale_here,
+				 vector<Type>& margin_sd,
+				 matrix<Type>& corr) {
+  if (!is_toep_margin(code))
+    error("unsupported Toeplitz margin for separable covariance structure");
+
+  margin_sd.resize(n);
+  margin_sd.fill(Type(1));
+  if (scale_here) {
+    if (code == homtoep_covstruct) {
+      margin_sd.fill(exp(theta(theta_pos++)));
+    } else {
+      vector<Type> logsd = theta.segment(theta_pos, n);
+      theta_pos += n;
+      margin_sd = exp(logsd);
+    }
+  }
+
+  vector<Type> corr_params = theta.segment(theta_pos, n - 1);
+  theta_pos += n - 1;
+  corr_params = corr_params / sqrt(Type(1) + corr_params * corr_params);
+  corr.resize(n, n);
+  for (int i = 0; i < n; i++)
+    for (int j = 0; j < n; j++)
+      corr(i, j) = (i == j ? Type(1) :
+		    corr_params((i > j ? i - j : j - i) - 1));
 }
 
 template <class Type>
@@ -673,7 +708,8 @@ Type eval_separable_2d(array<Type> &U, const vector<Type>& cell_sd,
 }
 
 bool is_separable_corr_matrix_kind(int kind) {
-  return kind == dense_corr_sep || kind == ar1_sep || kind == diag_sep;
+  return kind == dense_corr_sep || kind == ar1_sep || kind == diag_sep ||
+    kind == toep_sep;
 }
 
 template <class Type>
@@ -706,6 +742,9 @@ sep_corr_margin_pars<Type> parse_separable_corr_margin(int code, int kind,
       density::UNSTRUCTURED_CORR_t<Type> us_density(us_corr_params);
       out.corr = us_density.cov();
     }
+  } else if (kind == toep_sep) {
+    parse_separable_toep_margin(code, n, theta, theta_pos, scale_here,
+				out.sd, out.corr);
   } else {
     error("unsupported separable margin for correlation-matrix evaluator");
   }

@@ -305,10 +305,12 @@ parseNumLevels <- function(levels) {
 .sep_corr_matrix_codes <- list(
     dense_corr = c("cs", "homcs", "us"),
     ar1 = c("ar1", "hetar1"),
-    diag = c("diag", "homdiag")
+    diag = c("diag", "homdiag"),
+    toep = c("toep", "homtoep")
 )
 
 .sep_pair_dispatch <- function(regs) {
+    if (length(regs) != 2L) return(NA_character_)
     kinds <- vapply(regs, `[[`, character(1), "density_kind")
     codes <- vapply(regs, `[[`, character(1), "code")
     for (i in seq_along(regs)) {
@@ -422,7 +424,7 @@ parseNumLevels <- function(levels) {
     stop("separable() frontend parsed ", .sep_margin_label(margins),
          ", but the backend currently only evaluates two-margin products ",
          "among diag(), homdiag(), ar1(), hetar1(), cs(), homcs(), ",
-         "and us().")
+         "us(), toep(), and homtoep().")
 }
 
 .sep_restruc_info <- function(spec, cnms, blksize) {
