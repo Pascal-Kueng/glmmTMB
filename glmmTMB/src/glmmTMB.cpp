@@ -116,15 +116,10 @@ enum separable_dispatch {
 
 enum separable_scale_mode {
   // These values must match `.sep_scale_mode_code` in R/utils_covstruct.R.
-  //
-  // Current implementation:
-  //   margin: one separable margin carries absolute SD parameters and all other
-  //           margins are correlation-only.
-  //
-  // Future scale modes such as global/product/cell should get new enum values
-  // here and new scale builders.  The dense x AR(1) evaluator below only
-  // accepts margin scale for now.
-  margin_sep_scale = 1
+  margin_sep_scale = 1,
+  global_sep_scale = 2,
+  product_sep_scale = 3,
+  selected_product_sep_scale = 4
 };
 
 // should probably be named just 'predictCode';
@@ -345,10 +340,10 @@ struct per_term_info {
   // one flat vector per grouping level.  For a two-dimensional separable term,
   // the flat vector is conceptually an array with dimensions:
   //
-  //   sepDims(0) = number of levels in the first sepgrid() coordinate
-  //   sepDims(1) = number of levels in the second sepgrid() coordinate
+  //   sepDims(0) = number of columns in the first product margin
+  //   sepDims(1) = number of columns in the second product margin
   //
-  // The storage order follows sepgrid()/numFactor() convention:
+  // The storage order follows the same convention as sepgrid()/numFactor():
   //
   //   flat index = coord1 + sepDims(0) * coord2
   //
@@ -361,14 +356,9 @@ struct per_term_info {
   // `sepDispatch` is order-insensitive and selects a C++ evaluator for the
   // pair of margin density kinds.
   //
-  // `sepScaleMode` and `sepScaleSpec` describe cell standard deviations.  The
-  // current evaluator supports only:
-  //
-  //   sepScaleMode = margin_sep_scale
-  //   sepScaleSpec = zero-based coordinate whose margin carries SD parameters
-  //
-  // Keeping mode and spec separate makes the R/C++ contract extensible without
-  // changing the likelihood code that only needs the selected margin today.
+  // `sepScaleMode` and `sepScaleSpec` describe how cell standard deviations are
+  // built: one selected margin, one global scale, all scale-capable margins, or
+  // an explicit product of selected margins.
   vector<int> sepDims;
   vector<int> sepCodes;
   vector<int> sepDensityKinds;
@@ -451,7 +441,7 @@ struct terms_t : vector<per_term_info<Type> > {
 };
 
 template <class Type, class DenseDensity>
-Type separable_dense_ar1_nll(array<Type> &U, vector<Type> sd, Type phi,
+Type separable_dense_ar1_nll(array<Type> &U, vector<Type> cell_sd, Type phi,
 				     DenseDensity dense_density,
 				     per_term_info<Type>& term,
 				     int dense_margin, int ar1_margin) {
@@ -463,20 +453,18 @@ Type separable_dense_ar1_nll(array<Type> &U, vector<Type> sd, Type phi,
   vector<int> dim(2);
   dim << n0, n1;
   Type ans = 0;
-  int scale_margin = term.sepScaleSpec(0);
 
   for (int g = 0; g < term.blockReps; g++) {
     array<Type> z(dim);
     Type logscale = 0;
-    // Convert the flat block for group g into an array in sepgrid() order:
+    // Convert the flat block for group g into an array in product-grid order:
     //   k = i0 + n0 * i1
-    // Manual scaling keeps the separable margin-scale convention explicit.
+    // Manual scaling keeps all supported scale conventions in one place.
     for (int i1 = 0; i1 < n1; i1++) {
       for (int i0 = 0; i0 < n0; i0++) {
         int k = i0 + n0 * i1;
-        int si = (scale_margin == 0 ? i0 : i1);
-        z(i0, i1) = U(k, g) / sd(si);
-        logscale += log(sd(si));
+        z(i0, i1) = U(k, g) / cell_sd(k);
+        logscale += log(cell_sd(k));
       }
     }
     if (dense_margin == 0 && ar1_margin == 1) {
@@ -498,7 +486,7 @@ struct sep_dense_ar1_pars {
   int ar1_margin;
   int dense_code;
   Type phi;
-  vector<Type> sd;
+  vector<Type> cell_sd;
   matrix<Type> dense_corr;
   vector<Type> us_corr_params;
 };
@@ -521,19 +509,21 @@ matrix<Type> compound_symmetry_corr(int n, Type corr_transf) {
 template <class Type>
 void parse_separable_dense_margin(int code, int n, vector<Type> theta,
 				  int& theta_pos, bool scale_here,
-				  vector<Type>& sd, matrix<Type>& corr,
+				  vector<Type>& margin_sd,
+				  matrix<Type>& corr,
 				  vector<Type>& us_corr_params) {
   if (!is_dense_corr_margin(code))
     error("unsupported dense margin for separable covariance structure");
 
+  margin_sd.resize(n);
+  margin_sd.fill(Type(1));
   if (scale_here) {
     if (code == homcs_covstruct) {
-      sd.resize(n);
-      sd.fill(exp(theta(theta_pos++)));
+      margin_sd.fill(exp(theta(theta_pos++)));
     } else {
       vector<Type> logsd = theta.segment(theta_pos, n);
       theta_pos += n;
-      sd = exp(logsd);
+      margin_sd = exp(logsd);
     }
   }
 
@@ -547,17 +537,30 @@ void parse_separable_dense_margin(int code, int n, vector<Type> theta,
 }
 
 template <class Type>
+bool separable_margin_has_scale(per_term_info<Type>& term, int m) {
+  for (int i = 0; i < term.sepScaleSpec.size(); i++)
+    if (term.sepScaleSpec(i) == m) return true;
+  return false;
+}
+
+template <class Type>
 void check_separable_metadata(per_term_info<Type>& term) {
   if (term.sepDims.size() != 2 || term.sepCodes.size() != 2 ||
       term.sepDensityKinds.size() != 2 || term.sepDispatch.size() != 1 ||
-      term.sepScaleMode.size() != 1 || term.sepScaleSpec.size() != 1)
+      term.sepScaleMode.size() != 1)
     error("separable covariance structure is missing margin metadata");
   if (term.sepDims(0) * term.sepDims(1) != term.blockSize)
     error("separable dimensions do not match block size");
-  if (term.sepScaleMode(0) != margin_sep_scale)
-    error("separable covariance currently supports only margin scale");
-  if (term.sepScaleSpec(0) < 0 || term.sepScaleSpec(0) > 1)
-    error("separable margin scale index is out of range");
+  int mode = term.sepScaleMode(0);
+  if (mode < margin_sep_scale || mode > selected_product_sep_scale)
+    error("unknown separable scale mode");
+  if (mode == global_sep_scale && term.sepScaleSpec.size() != 0)
+    error("separable global scale should not specify scale margins");
+  if (mode != global_sep_scale && term.sepScaleSpec.size() == 0)
+    error("separable scale mode is missing selected margins");
+  for (int i = 0; i < term.sepScaleSpec.size(); i++)
+    if (term.sepScaleSpec(i) < 0 || term.sepScaleSpec(i) > 1)
+      error("separable margin scale index is out of range");
 }
 
 template <class Type>
@@ -576,30 +579,49 @@ sep_dense_ar1_pars<Type> parse_separable_dense_ar1(vector<Type> theta,
   if (out.dense_margin < 0 || out.ar1_margin < 0 ||
       out.dense_margin == out.ar1_margin)
     error("separable covariance currently requires one dense margin and one AR1 margin");
-  if (term.sepScaleSpec(0) != out.dense_margin)
-    error("separable covariance currently requires scale on the dense margin");
 
-  int n_dense = term.sepDims(out.dense_margin);
   out.dense_code = term.sepCodes(out.dense_margin);
   out.phi = Type(0);
-  out.sd.resize(n_dense);
+  out.cell_sd.resize(term.blockSize);
+  out.cell_sd.fill(Type(1));
   out.us_corr_params.resize(0);
+  Type global_sd = Type(1);
+  vector<Type> sd0(term.sepDims(0));
+  vector<Type> sd1(term.sepDims(1));
+  sd0.fill(Type(1));
+  sd1.fill(Type(1));
 
   int theta_pos = 0;
+  if (term.sepScaleMode(0) == global_sep_scale)
+    global_sd = exp(theta(theta_pos++));
   for (int m = 0; m < 2; m++) {
     int code = term.sepCodes(m);
     int n = term.sepDims(m);
-    bool scale_here = (term.sepScaleSpec(0) == m);
+    bool scale_here = separable_margin_has_scale(term, m);
 
     if (term.sepDensityKinds(m) == ar1_sep) {
+      if (scale_here)
+	error("AR1 separable margins cannot carry scale parameters");
       Type corr_transf = theta(theta_pos++);
       // Same transform used by existing glmmTMB AR1.
       out.phi = corr_transf / sqrt(Type(1) + pow(corr_transf, 2));
     } else if (term.sepDensityKinds(m) == dense_corr_sep) {
+      vector<Type> margin_sd(n);
       parse_separable_dense_margin(code, n, theta, theta_pos, scale_here,
-				   out.sd, out.dense_corr, out.us_corr_params);
+				   margin_sd, out.dense_corr,
+				   out.us_corr_params);
+      if (m == 0) sd0 = margin_sd;
+      if (m == 1) sd1 = margin_sd;
     } else {
       error("unsupported dense margin for separable covariance structure");
+    }
+  }
+  int n0 = term.sepDims(0);
+  int n1 = term.sepDims(1);
+  for (int i1 = 0; i1 < n1; i1++) {
+    for (int i0 = 0; i0 < n0; i0++) {
+      int k = i0 + n0 * i1;
+      out.cell_sd(k) = global_sd * sd0(i0) * sd1(i1);
     }
   }
   if (theta_pos != theta.size())
@@ -609,23 +631,15 @@ sep_dense_ar1_pars<Type> parse_separable_dense_ar1(vector<Type> theta,
 }
 
 template <class Type>
-void report_separable_dense_ar1(vector<Type> sd, matrix<Type> dense_corr,
+void report_separable_dense_ar1(vector<Type> cell_sd, matrix<Type> dense_corr,
 				Type phi, per_term_info<Type>& term,
 				int dense_margin, int ar1_margin) {
   // Build report objects for VarCorr().
   int n0 = term.sepDims(0);
   int n1 = term.sepDims(1);
   int n = n0 * n1;
-  int scale_margin = term.sepScaleSpec(0);
   term.sd.resize(n);
-  // Repeat each margin SD across the other coordinate.
-  for (int i1 = 0; i1 < n1; i1++) {
-    for (int i0 = 0; i0 < n0; i0++) {
-      int k = i0 + n0 * i1;
-      int si = (scale_margin == 0 ? i0 : i1);
-      term.sd(k) = sd(si);
-    }
-  }
+  term.sd = cell_sd;
   if (term.fullCor == 1) {
     // Construct the full correlation only for reporting/testing.
     term.corr.resize(n, n);
@@ -1115,18 +1129,18 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
       sep_dense_ar1_pars<Type> sep = parse_separable_dense_ar1(theta, term);
       if (sep.dense_code == cs_covstruct || sep.dense_code == homcs_covstruct) {
 	density::MVNORM_t<Type> dense_density(sep.dense_corr);
-	ans += separable_dense_ar1_nll(U, sep.sd, sep.phi, dense_density, term,
+	ans += separable_dense_ar1_nll(U, sep.cell_sd, sep.phi, dense_density, term,
 				       sep.dense_margin, sep.ar1_margin);
 	DISABLE_AD {
-	  report_separable_dense_ar1(sep.sd, sep.dense_corr, sep.phi, term,
+	  report_separable_dense_ar1(sep.cell_sd, sep.dense_corr, sep.phi, term,
 				     sep.dense_margin, sep.ar1_margin);
 	}
       } else if (sep.dense_code == us_covstruct) {
 	density::UNSTRUCTURED_CORR_t<Type> dense_density(sep.us_corr_params);
-	ans += separable_dense_ar1_nll(U, sep.sd, sep.phi, dense_density, term,
+	ans += separable_dense_ar1_nll(U, sep.cell_sd, sep.phi, dense_density, term,
 				       sep.dense_margin, sep.ar1_margin);
 	DISABLE_AD {
-	  report_separable_dense_ar1(sep.sd, dense_density.cov(), sep.phi, term,
+	  report_separable_dense_ar1(sep.cell_sd, dense_density.cov(), sep.phi, term,
 				     sep.dense_margin, sep.ar1_margin);
 	}
       } else {

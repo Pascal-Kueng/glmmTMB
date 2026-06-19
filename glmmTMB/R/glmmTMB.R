@@ -318,9 +318,12 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
                                                sprintf("%d != 1 or %d", length(full_cor), nREtot))
     full_cor <- rep(full_cor, length.out = nREtot)
     fc_list <- split(full_cor, factor(rep(1:3, times = nRE), levels=1:3))
-    condReStruc <- with(condList, getReStruc(reTrms, ss, aa, reXterms, fr, fc_list[[1]]))
-    ziReStruc <- with(ziList, getReStruc(reTrms, ss, aa, reXterms, fr, fc_list[[2]]))
-    dispReStruc <- with(dispList, getReStruc(reTrms, ss, aa, reXterms, fr, fc_list[[3]]))
+    condReStruc <- with(condList, getReStruc(reTrms, ss, aa, reXterms, fr,
+                                             fc_list[[1]], sepSpecs = sepSpecs))
+    ziReStruc <- with(ziList, getReStruc(reTrms, ss, aa, reXterms, fr,
+                                         fc_list[[2]], sepSpecs = sepSpecs))
+    dispReStruc <- with(dispList, getReStruc(reTrms, ss, aa, reXterms, fr,
+                                             fc_list[[3]], sepSpecs = sepSpecs))
     
     grpVar <- with(condList, getGrpVar(reTrms$flist))
 
@@ -707,6 +710,8 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
     ## important to COPY formula (and its environment)?
     ranform <- formula
 
+    sepSpecs <- attr(formula, "separable_specs", exact = TRUE)
+
     if (!has_re && !has_smooths) {
         reTrms <- reXterms <- NULL
         Z <- new("dgCMatrix",Dim=c(as.integer(nobs),0L)) ## matrix(0, ncol=0, nrow=nobs)
@@ -806,6 +811,11 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
             reTrms <- augReTrms
         }
 
+        sep_re <- .sep_replace_product_reterms(reTrms, ss, sepSpecs, fr,
+                                               environment(formula))
+        reTrms <- sep_re$reTrms
+        sepSpecs <- sep_re$sepSpecs
+
         ss$reTrmClasses[ss$reTrmClasses == "s"] <- "homdiag"
         # FIX ME: migrate this (or something like it) down to reTrms,
         ##    allow for more different covstruct types that have additional arguments
@@ -855,6 +865,8 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
             if (identical(a[[1]], as.symbol('s'))) NA else termsfun(f)
         }
         reXterms <- Map(drop_s, ss$reTrmFormulas, ss$reTrmAddArgs)
+        reXterms <- .sep_replace_reXterms(reXterms, ss$reTrmClasses, aa,
+                                          sepSpecs, environment(formula))
         
         for (i in seq_along(ss$reTrmAddArgs)) {
           if(ss$reTrmClasses[i] == "rr") {
@@ -885,7 +897,7 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
     ## list(fr = fr, X = X, reTrms = reTrms, family = family, formula = formula,
     ##      wmsgs = c(Nlev = wmsgNlev, Zdims = wmsgZdims, Zrank = wmsgZrank))
 
-    namedList(X, Z, reTrms, ss, aa, terms, offset, reXterms)
+    namedList(X, Z, reTrms, ss, aa, terms, offset, reXterms, sepSpecs)
 }
 
 ##' Get theta parameterisation of a covariance structure
@@ -992,7 +1004,8 @@ getGrpVar <- function(x)
 ##' getReStruc(rt2)
 ##' @importFrom stats setNames dist .getXlevels
 ##' @export
-getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_cor=NULL) {
+getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
+                       full_cor=NULL, sepSpecs=NULL) {
 
     ## information from ReTrms is contained in cnms, flist elements
     ## cnms: list of column-name vectors per term
@@ -1026,7 +1039,9 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
     blkrank <- mapply(getRank, ss, aa)
     sepInfo <- vector("list", length(ss))
     for (i in which(ss == "separable")) {
-        sepInfo[[i]] <- .sep_restruc_info(aa[[i]], reTrms$cnms[[i]], blksize[i])
+        sepInfo[[i]] <- .sep_restruc_info(.sep_spec_from_id_or_value(aa[[i]],
+                                                                      sepSpecs),
+                                           reTrms$cnms[[i]], blksize[i])
     }
     
     parFun <- function(struc, blksize, blkrank, sep_info) {
@@ -1088,8 +1103,8 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
             coords <- parseNumLevels(reTrms$cnms[[i]])
             tmp$dist <- as.matrix( dist(coords) )
         } else if(ss[i] == "separable") {
-            ## Metadata needed to reshape flat random-effect blocks and dispatch
-            ## to the separable marginal densities in C++.
+            ## Spec fields needed to reshape flat random-effect blocks and
+            ## dispatch to the separable marginal densities in C++.
             tmp$sepDims <- sepInfo[[i]]$dims
             tmp$sepCodes <- sepInfo[[i]]$codes
             tmp$sepDensityKinds <- sepInfo[[i]]$density_kinds
@@ -1399,6 +1414,7 @@ glmmTMB <- function(
     ## combine all formulas
     formList <- list(formula, ziformula, dispformula)
     sepgrid_cols <- .sepgrid_colnames(formula, ziformula, dispformula)
+    sep_margin_vars <- .sep_margin_varnames(formula, ziformula, dispformula)
     for (i in seq_along(formList)) {
         f <- formList[[i]] ## abbreviate
         ## substitute "|" by "+"; drop specials
@@ -1416,19 +1432,22 @@ glmmTMB <- function(
     }
 
     mf$formula <- combForm
-    ## `sepgrid()` factors encode the full latent separable grid.  If
-    ## model.frame() drops their unused levels, globally missing cells disappear
-    ## and AR(1) spacing is wrong (e.g. days 1 and 3 become adjacent when day 2
-    ## is unobserved).  Evaluate with unused levels preserved whenever a
-    ## sepgrid() expression is present, then restore the usual
-    ## drop_unused_levels behavior for every other factor column below.
-    if (length(sepgrid_cols) > 0L && control$drop_unused_levels) {
+    ## Separable terms use factor levels to define marginal product columns.  If
+    ## model.frame() drops unused levels, globally missing cells disappear and
+    ## AR(1) spacing is wrong (e.g. days 1 and 3 become adjacent when day 2 is
+    ## unobserved).  Evaluate with unused levels preserved whenever a separable
+    ## term is present, then restore the usual drop_unused_levels behavior for
+    ## every unrelated factor column below.
+    if ((length(sepgrid_cols) > 0L || length(sep_margin_vars) > 0L) &&
+        control$drop_unused_levels) {
         mf$drop.unused.levels <- FALSE
     }
     fr <- eval(mf,envir=environment(formula),enclos=parent.frame())
-    if (length(sepgrid_cols) > 0L && control$drop_unused_levels) {
+    if ((length(sepgrid_cols) > 0L || length(sep_margin_vars) > 0L) &&
+        control$drop_unused_levels) {
         for (nm in names(fr)) {
-            if (is.factor(fr[[nm]]) && !(nm %in% sepgrid_cols)) {
+            if (is.factor(fr[[nm]]) &&
+                !(nm %in% c(sepgrid_cols, sep_margin_vars))) {
                 fr[[nm]] <- droplevels(fr[[nm]])
             }
         }
