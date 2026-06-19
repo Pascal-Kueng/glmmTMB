@@ -309,8 +309,7 @@ parseNumLevels <- function(levels) {
     toep = c("toep", "homtoep")
 )
 
-.sep_pair_dispatch <- function(regs) {
-    if (length(regs) != 2L) return(NA_character_)
+.sep_dispatch <- function(regs) {
     kinds <- vapply(regs, `[[`, character(1), "density_kind")
     codes <- vapply(regs, `[[`, character(1), "code")
     for (i in seq_along(regs)) {
@@ -418,13 +417,13 @@ parseNumLevels <- function(levels) {
     )
 }
 
-.sep_stop_unsupported_pair <- function(margins, regs, scale = NULL) {
+.sep_stop_unsupported_dispatch <- function(margins, regs, scale = NULL) {
     ## Diagnose scale errors before reporting unsupported density combinations.
     .sep_scale_info(margins, regs, scale)
     stop("separable() frontend parsed ", .sep_margin_label(margins),
-         ", but the backend currently only evaluates two-margin products ",
-         "among diag(), homdiag(), ar1(), hetar1(), cs(), homcs(), ",
-         "us(), toep(), and homtoep().")
+         ", but the backend currently only evaluates products among diag(), ",
+         "homdiag(), ar1(), hetar1(), cs(), homcs(), us(), toep(), ",
+         "and homtoep().")
 }
 
 .sep_restruc_info <- function(spec, cnms, blksize) {
@@ -444,11 +443,11 @@ parseNumLevels <- function(levels) {
     if (nrow(margins) != length(dims))
         stop("separable() margin metadata does not match the product design.")
 
-    pair <- margins$struc
-    regs <- .sep_margin_registry[pair]
-    dispatch <- .sep_pair_dispatch(regs)
+    strucs <- margins$struc
+    regs <- .sep_margin_registry[strucs]
+    dispatch <- .sep_dispatch(regs)
     if (is.na(dispatch)) {
-        .sep_stop_unsupported_pair(margins, regs, spec$scale)
+        .sep_stop_unsupported_dispatch(margins, regs, spec$scale)
     }
     if (!identical(margins$var, spec$grid)) {
         stop("The separable() margin variables must match the product design. ",
@@ -473,7 +472,7 @@ parseNumLevels <- function(levels) {
 
     list(
         dims = dims,
-        codes = as.integer(vapply(pair, function(z) .valid_covstruct[[z]], numeric(1))),
+        codes = as.integer(vapply(strucs, function(z) .valid_covstruct[[z]], numeric(1))),
         density_kinds = as.integer(.sep_density_kind_code[density_kind]),
         dispatch = as.integer(.sep_dispatch_code[dispatch]),
         scale_mode = scale_info$mode_code,
@@ -522,8 +521,8 @@ parseNumLevels <- function(levels) {
     ##   separable(us(0 + role) %x% ar1(0 + day) | group, scale = us(0 + role))
     ##
     ## into an internal product-design representation.  Margins may contain
-    ## multiple no-intercept columns; the current backend still supports only
-    ## two margins and selected dense-correlation/AR(1) combinations.
+    ## multiple no-intercept columns; the current backend supports products of
+    ## correlation-matrix margins.
     if (!is.call(bar_expr) || !identical(.sep_call_name(bar_expr), "|") ||
         length(bar_expr) != 3L) {
         stop("separable() product syntax must look like ",

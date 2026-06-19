@@ -360,6 +360,91 @@ make_sep_margin_pair_case <- function(m0, m1,
          scale_spec = as.integer(scale_index - 1L))
 }
 
+make_sep_margin_chain_case <- function(margins, vars = paste0("v", seq_along(margins)),
+                                       scale_mode = c("global", "product",
+                                                      "selected_product"),
+                                       scale_index = NULL) {
+    scale_mode <- match.arg(scale_mode)
+    dims <- vapply(margins, function(m) nrow(m$R), integer(1))
+    factors <- lapply(dims, function(n) factor(seq_len(n)))
+    names(factors) <- vars
+    dd <- do.call(expand.grid, c(factors, list(group = factor(seq_len(2)))))
+    dd$y <- 0
+
+    calls <- Map(margin_call, vapply(margins, `[[`, character(1), "struc"),
+                 vars)
+    product_call <- Reduce(function(a, b) {
+        as.call(list(as.name("%x%"), a, b))
+    }, calls)
+    if (scale_mode == "global") {
+        scale_call <- quote(global())
+        scale_index <- integer()
+    } else if (scale_mode == "product") {
+        scale_call <- quote(product())
+        scale_index <- which(vapply(margins, function(m) length(m$scale_theta),
+                                    integer(1)) > 0L)
+    } else {
+        scale_call <- as.call(c(list(as.name("product")), calls[scale_index]))
+    }
+    sep_call <- as.call(list(
+        as.name("separable"),
+        as.call(list(as.name("|"), product_call, quote(group))),
+        scale = scale_call
+    ))
+    form <- as.formula(as.call(list(quote(`~`), quote(y),
+        as.call(list(quote(`+`), 1, sep_call)))))
+
+    theta <- unlist(lapply(seq_along(margins), function(i) {
+        c(if (i %in% scale_index) margins[[i]]$scale_theta,
+          margins[[i]]$corr_theta)
+    }), use.names = FALSE)
+    global_sd <- 1.25
+    if (scale_mode == "global") theta <- c(log(global_sd), theta)
+
+    coords <- do.call(expand.grid, lapply(dims, seq_len))
+    sd_full <- if (scale_mode == "global") {
+        rep(global_sd, prod(dims))
+    } else {
+        ans <- rep(1, prod(dims))
+        for (i in scale_index) {
+            sd_i <- margins[[i]]$sd
+            if (length(sd_i) == 1L) sd_i <- rep(sd_i, dims[[i]])
+            ans <- ans * sd_i[coords[[i]]]
+        }
+        ans
+    }
+    R_full <- margins[[1]]$R
+    for (i in seq_along(margins)[-1]) {
+        R_full <- kronecker(margins[[i]]$R, R_full)
+    }
+
+    dense_grid <- as.call(c(list(as.name("sepgrid")), lapply(vars, as.name)))
+    dense_rhs <- as.call(list(
+        as.name("|"),
+        as.call(list(as.name("+"), dense_grid, 0)),
+        quote(group)
+    ))
+    dense_form <- as.formula(as.call(list(quote(`~`), quote(y),
+        as.call(list(quote(`+`), 1,
+                     as.call(list(as.name("us"), dense_rhs)))))))
+
+    list(form = form,
+         dense_form = dense_form,
+         dd = dd,
+         theta = theta,
+         theta_dense = c(log(sd_full), put_cor(R_full)),
+         R_full = R_full,
+         sd_full = sd_full,
+         codes = unname(vapply(margins, function(m) .valid_covstruct[[m$struc]],
+                               numeric(1))),
+         kinds = vapply(margins, function(m) sep_kind_code(m$struc),
+                        integer(1)),
+         dispatch = 1L,
+         scale_mode = switch(scale_mode,
+             global = 2L, product = 3L, selected_product = 4L),
+         scale_spec = as.integer(scale_index - 1L))
+}
+
 make_sep_dense_dense_case <- function(struc0 = c("cs", "homcs", "us"),
                                       struc1 = c("cs", "homcs", "us"),
                                       scale_mode = c("global", "product",
@@ -950,7 +1035,7 @@ test_that("unsupported separable products fail at backend boundary", {
 
     expect_error(
         glmmTMB(y ~ 1 +
-                    separable(diag(0 + member) %x% ar1(0 + time) %x%
+                    separable(diag(0 + member) %x% ou(0 + time) %x%
                                   homtoep(0 + item) | group,
                               scale = global()),
                 data = dd, doFit = FALSE),
@@ -1222,6 +1307,35 @@ test_that("separable supports Toeplitz correlation margins", {
             make_diag_margin("diag", n = 3),
             make_toep_margin("homtoep", n = 3),
             scale_mode = "global"
+        )
+    )
+    invisible(lapply(cases, expect_separable_case_vc))
+    invisible(lapply(cases, expect_separable_case_nll))
+})
+
+test_that("separable supports three correlation-matrix margins", {
+    cases <- list(
+        make_sep_margin_chain_case(
+            list(make_dense_margin("us", n = 2),
+                 make_ar1_margin("hetar1", n = 3),
+                 make_toep_margin("homtoep", n = 2)),
+            vars = c("member", "time", "item"),
+            scale_mode = "product"
+        ),
+        make_sep_margin_chain_case(
+            list(make_diag_margin("diag", n = 2),
+                 make_ar1_margin("ar1", n = 3),
+                 make_dense_margin("cs", n = 2)),
+            vars = c("member", "time", "item"),
+            scale_mode = "global"
+        ),
+        make_sep_margin_chain_case(
+            list(make_dense_margin("homcs", n = 2),
+                 make_diag_margin("homdiag", n = 3),
+                 make_toep_margin("toep", n = 2)),
+            vars = c("member", "item", "time"),
+            scale_mode = "selected_product",
+            scale_index = c(1L, 3L)
         )
     )
     invisible(lapply(cases, expect_separable_case_vc))
