@@ -306,6 +306,7 @@ parseNumLevels <- function(levels) {
     dense_corr = c("cs", "homcs", "us"),
     ar1 = c("ar1", "hetar1"),
     diag = c("diag", "homdiag"),
+    spatial = c("ou", "exp", "gau", "mat"),
     toep = c("toep", "homtoep")
 )
 
@@ -422,8 +423,37 @@ parseNumLevels <- function(levels) {
     .sep_scale_info(margins, regs, scale)
     stop("separable() frontend parsed ", .sep_margin_label(margins),
          ", but the backend currently only evaluates products among diag(), ",
-         "homdiag(), ar1(), hetar1(), cs(), homcs(), us(), toep(), ",
-         "and homtoep().")
+         "homdiag(), ar1(), hetar1(), cs(), homcs(), us(), ou(), exp(), ",
+         "gau(), mat(), toep(), and homtoep().")
+}
+
+.sep_spatial_info <- function(margins, spec, dims) {
+    spatial <- margins$struc %in% c("ou", "exp", "gau", "mat")
+    starts <- rep.int(-1L, length(dims))
+    dists <- numeric()
+    if (!any(spatial)) return(list(starts = starts, dists = dists))
+
+    if (is.null(spec$margin_cnms)) {
+        stop("separable() spatial margins require product-margin column names.")
+    }
+    for (i in which(spatial)) {
+        coords <- tryCatch(suppressWarnings(parseNumLevels(spec$margin_cnms[[i]])),
+                           error = function(e) {
+                               stop("separable() spatial margins require ",
+                                    "numeric coordinate levels, usually from ",
+                                    "numFactor().", call. = FALSE)
+                           })
+        if (nrow(coords) != dims[[i]]) {
+            stop("separable() spatial margin metadata does not match the ",
+                 "product design.")
+        }
+        if (margins$struc[[i]] == "ou" && ncol(coords) != 1L) {
+            stop("'ou' separable() margins are for 1D coordinates only.")
+        }
+        starts[[i]] <- length(dists)
+        dists <- c(dists, as.vector(as.matrix(stats::dist(coords))))
+    }
+    list(starts = starts, dists = dists)
 }
 
 .sep_restruc_info <- function(spec, cnms, blksize) {
@@ -469,6 +499,7 @@ parseNumLevels <- function(levels) {
     }, integer(1)))
     ntheta <- scale_ntheta + corr_ntheta
     density_kind <- vapply(regs, `[[`, character(1), "density_kind")
+    spatial_info <- .sep_spatial_info(margins, spec, dims)
 
     list(
         dims = dims,
@@ -477,6 +508,8 @@ parseNumLevels <- function(levels) {
         dispatch = as.integer(.sep_dispatch_code[dispatch]),
         scale_mode = scale_info$mode_code,
         scale_spec = scale_info$spec,
+        dist_starts = spatial_info$starts,
+        dists = spatial_info$dists,
         ntheta = as.integer(ntheta),
         density_kind = density_kind,
         margins = margins,

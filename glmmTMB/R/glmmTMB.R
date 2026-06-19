@@ -1112,6 +1112,8 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
             tmp$sepDispatch <- sepInfo[[i]]$dispatch
             tmp$sepScaleMode <- sepInfo[[i]]$scale_mode
             tmp$sepScaleSpec <- sepInfo[[i]]$scale_spec
+            tmp$sepDistStarts <- sepInfo[[i]]$dist_starts
+            tmp$sepDists <- sepInfo[[i]]$dists
         }
         ans[[i]] <- tmp
     }

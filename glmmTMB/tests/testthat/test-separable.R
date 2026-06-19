@@ -265,6 +265,37 @@ make_toep_margin <- function(struc = c("toep", "homtoep"), n = 3,
     )
 }
 
+make_spatial_margin <- function(struc = c("ou", "exp", "gau", "mat"),
+                                coords = cbind(seq_len(3)), theta = 0.2) {
+    struc <- match.arg(struc)
+    coords <- as.matrix(coords)
+    D <- as.matrix(dist(coords))
+    R <- switch(struc,
+        ou = exp(-exp(theta) * D),
+        exp = exp(-D * exp(-theta)),
+        gau = exp(-(D^2) * exp(-2 * theta)),
+        mat = {
+            phi <- exp(theta[[1]])
+            kappa <- exp(theta[[2]])
+            M <- matrix(1, nrow(D), ncol(D))
+            keep <- D > 0
+            x <- D[keep] / phi
+            M[keep] <- x^kappa * besselK(x, kappa) /
+                (gamma(kappa) * 2^(kappa - 1))
+            M
+        }
+    )
+    diag(R) <- 1
+    list(
+        struc = struc,
+        sd = rep(1, nrow(coords)),
+        R = R,
+        scale_theta = numeric(),
+        corr_theta = theta,
+        levels = paste0("(", apply(coords, 1, paste, collapse = ","), ")")
+    )
+}
+
 margin_call <- function(struc, var) {
     as.call(list(as.name(struc),
                  as.call(list(as.name("+"), 0, as.name(var)))))
@@ -275,6 +306,7 @@ sep_kind_code <- function(struc) {
            cs = 1L, homcs = 1L, us = 1L,
            ar1 = 2L, hetar1 = 2L,
            diag = 3L, homdiag = 3L,
+           ou = 4L, exp = 4L, gau = 4L, mat = 4L,
            toep = 5L, homtoep = 5L)
 }
 
@@ -366,7 +398,10 @@ make_sep_margin_chain_case <- function(margins, vars = paste0("v", seq_along(mar
                                        scale_index = NULL) {
     scale_mode <- match.arg(scale_mode)
     dims <- vapply(margins, function(m) nrow(m$R), integer(1))
-    factors <- lapply(dims, function(n) factor(seq_len(n)))
+    factors <- Map(function(m, n) {
+        if (!is.null(m$levels)) factor(m$levels, levels = m$levels)
+        else factor(seq_len(n))
+    }, margins, dims)
     names(factors) <- vars
     dd <- do.call(expand.grid, c(factors, list(group = factor(seq_len(2)))))
     dd$y <- 0
@@ -1026,7 +1061,7 @@ test_that("separable product syntax supports multi-column dense margins", {
     expect_equal(length(fit$condList$reXterms[[1]]$terms), 2)
 })
 
-test_that("unsupported separable products fail at backend boundary", {
+test_that("separable spatial margins require numeric coordinate levels", {
     dd <- expand.grid(member = factor(paste0("m", 1:2)),
                       time = factor(1:3),
                       item = factor(paste0("i", 1:2)),
@@ -1039,7 +1074,7 @@ test_that("unsupported separable products fail at backend boundary", {
                                   homtoep(0 + item) | group,
                               scale = global()),
                 data = dd, doFit = FALSE),
-        "frontend parsed .*backend currently only evaluates"
+        "spatial margins require numeric coordinate levels"
     )
 })
 
@@ -1336,6 +1371,38 @@ test_that("separable supports three correlation-matrix margins", {
             vars = c("member", "item", "time"),
             scale_mode = "selected_product",
             scale_index = c(1L, 3L)
+        )
+    )
+    invisible(lapply(cases, expect_separable_case_vc))
+    invisible(lapply(cases, expect_separable_case_nll))
+})
+
+test_that("separable supports spatial correlation margins", {
+    cases <- list(
+        make_sep_margin_chain_case(
+            list(make_spatial_margin("ou", coords = cbind(c(0, 0.5, 2)),
+                                     theta = -0.1),
+                 make_dense_margin("us", n = 2)),
+            vars = c("time", "member"),
+            scale_mode = "global"
+        ),
+        make_sep_margin_chain_case(
+            list(make_spatial_margin("exp", coords = cbind(c(0, 1, 2),
+                                                           c(0, 0, 1)),
+                                     theta = 0.3),
+                 make_diag_margin("diag", n = 2),
+                 make_spatial_margin("gau", coords = cbind(c(0, 2)),
+                                     theta = 0.7)),
+            vars = c("space", "member", "time"),
+            scale_mode = "selected_product",
+            scale_index = 2L
+        ),
+        make_sep_margin_chain_case(
+            list(make_spatial_margin("mat", coords = cbind(c(0, 1, 3)),
+                                     theta = c(log(1.2), log(0.8))),
+                 make_diag_margin("homdiag", n = 2)),
+            vars = c("space", "member"),
+            scale_mode = "global"
         )
     )
     invisible(lapply(cases, expect_separable_case_vc))
