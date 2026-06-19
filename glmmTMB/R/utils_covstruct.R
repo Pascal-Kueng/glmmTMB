@@ -114,21 +114,14 @@ parseNumLevels <- function(levels) {
     ans
 }
 
-## The helpers below compile the public product syntax
+## The helpers below parse the public product syntax
 ##
 ##   separable(us(0 + member) %x% ar1(0 + time) | group,
 ##             scale = us(0 + member))
 ##
-## to an internal spec plus a lower-level random-effect term
-##
-##   separable(<combined margin variables> + 0 | group, <spec id>)
-##
-## `reformulas::splitForm()` still sees an ordinary covariance-structure
-## special, but only carries a small spec id.  The structured margin/scale
-## object is stored on the rewritten formula and passed explicitly to
-## `getReStruc()`.  `mkReTrms()` initially sees the combined lower-level term,
-## then glmmTMB replaces the separable term with the product of the marginal
-## model matrices before the TMB structures are built.
+## into an internal spec.  Separable terms are split with `splitForm()` like
+## other covariance specials, but are excluded from `mkReTrms()` because the
+## marginal covariance calls are not ordinary model-matrix expressions.
 .sep_deparse <- function(x) deparse1(x, collapse = "", width.cutoff = 500L)
 
 .sep_call_name <- function(x) {
@@ -157,13 +150,20 @@ parseNumLevels <- function(levels) {
     unique(vapply(calls, .sep_deparse, character(1)))
 }
 
-.sep_margin_varnames <- function(...) {
+.sep_formula_specs <- function(f) {
+    if (!inherits(f, "formula")) return(list())
+    ss <- reformulas::splitForm(f, specials = c(names(.valid_covstruct), "s"))
+    .sep_specs_from_split(ss)
+}
+
+.sep_margin_varnames <- function(..., include_group = FALSE) {
     forms <- list(...)
     vars <- unlist(lapply(forms, function(f) {
-        specs <- attr(f, "separable_specs", exact = TRUE)
-        if (is.null(specs)) return(character())
+        specs <- .sep_formula_specs(f)
         unlist(lapply(specs, function(spec) {
-            unique(unlist(lapply(spec$margins$expr, all.vars), use.names = FALSE))
+            ans <- unlist(lapply(spec$margins$expr, all.vars), use.names = FALSE)
+            if (include_group) ans <- c(ans, all.vars(spec$group))
+            unique(ans)
         }), use.names = FALSE)
     }), use.names = FALSE)
     unique(vars)
@@ -189,18 +189,6 @@ parseNumLevels <- function(levels) {
                var = .sep_product_margin_label(x[[2]]),
                expr = I(list(x[[2]])),
                stringsAsFactors = FALSE)
-}
-
-.sep_add_calls <- function(x) {
-    if (length(x) == 1L) return(x[[1]])
-    Reduce(function(a, b) as.call(list(as.name("+"), a, b)), x)
-}
-
-.sep_design_bar_call <- function(exprs, group) {
-    rhs <- as.call(list(as.name("+"), 0, .sep_add_calls(exprs)))
-    as.call(list(as.name("|"),
-                 rhs,
-                 group))
 }
 
 .sep_spec_df <- function(x, what = "margin") {
@@ -555,7 +543,7 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_make_product_spec <- function(bar_expr, scale = NULL) {
-    ## Compile the public product syntax
+    ## Parse the public product syntax
     ##
     ##   separable(us(0 + role) %x% ar1(0 + day) | group, scale = us(0 + role))
     ##
@@ -588,10 +576,45 @@ parseNumLevels <- function(levels) {
         list(grid = margins$var,
              margins = margins,
              group = bar_expr[[3]],
-             scale = scale_spec,
-             grid_expr = .sep_design_bar_call(margins$expr, bar_expr[[3]])),
+             scale = scale_spec),
         class = "glmmTMB_separable_spec"
     )
+}
+
+.sep_scale_arg_from_add_arg <- function(add_arg) {
+    if (!is.call(add_arg) || !identical(.sep_call_name(add_arg), "separable")) {
+        stop("Internal separable() add-argument is malformed.")
+    }
+    args <- as.list(add_arg[-1])
+    nms <- names(args)
+    if (is.null(nms)) nms <- rep("", length(args))
+    scale_i <- which(nms == "scale")
+    if (length(scale_i) > 1L)
+        stop("separable() accepts at most one scale argument.")
+    named_i <- which(nzchar(nms) & nms != "scale")
+    if (length(named_i) > 0L) {
+        stop("separable() only accepts named argument scale.")
+    }
+    unnamed_args <- args[!nzchar(nms)]
+    if (length(unnamed_args) > 0L) {
+        stop("separable() requires separable(",
+             "margin1(0 + variable) %x% margin2(0 + variable) | group).")
+    }
+    if (length(scale_i)) args[[scale_i]] else NULL
+}
+
+.sep_make_product_spec_from_split <- function(bar_expr, add_arg) {
+    .sep_make_product_spec(bar_expr, .sep_scale_arg_from_add_arg(add_arg))
+}
+
+.sep_specs_from_split <- function(ss) {
+    sep_pos <- which(ss$reTrmClasses == "separable")
+    specs <- vector("list", length(ss$reTrmClasses))
+    for (i in sep_pos) {
+        specs[[i]] <- .sep_make_product_spec_from_split(ss$reTrmFormulas[[i]],
+                                                        ss$reTrmAddArgs[[i]])
+    }
+    specs[!vapply(specs, is.null, logical(1))]
 }
 
 .sep_margin_formula <- function(expr, env) {
@@ -675,28 +698,10 @@ parseNumLevels <- function(levels) {
     list(Zt = Zt, cnms = cnms, spec = spec)
 }
 
-.sep_replace_product_reterms <- function(reTrms, ss, sepSpecs, fr, env) {
-    if (is.null(sepSpecs) || !length(sepSpecs)) return(list(reTrms = reTrms,
-                                                            sepSpecs = sepSpecs))
-    sep_pos <- which(ss$reTrmClasses == "separable")
-    if (!length(sep_pos)) return(list(reTrms = reTrms, sepSpecs = sepSpecs))
-
-    ## Run after smooth augmentation: by this point Ztlist positions match
-    ## splitForm() term order, so separable terms can be replaced in place.
-    assign <- attr(reTrms$flist, "assign")
-    for (i in sep_pos) {
-        id <- .sep_resolve_spec_id(eval(ss$reTrmAddArgs[[i]][[2]],
-                                        envir = fr, enclos = env),
-                                   sepSpecs)
-        group <- reTrms$flist[[assign[i]]]
-        repl <- .sep_build_product_reterm(sepSpecs[[id]], fr, group, env)
-        reTrms$Ztlist[[i]] <- repl$Zt
-        reTrms$cnms[[i]] <- repl$cnms
-        sepSpecs[[id]] <- repl$spec
-    }
-    reTrms$Zt <- do.call(rbind, reTrms$Ztlist)
-    reTrms$Gp <- cumsum(c(0L, vapply(reTrms$Ztlist, nrow, integer(1))))
-    list(reTrms = reTrms, sepSpecs = sepSpecs)
+.sep_group_factor <- function(expr, fr, env) {
+    g <- eval(expr, envir = fr, enclos = env)
+    if (anyNA(g)) stop("separable() grouping factor contains NA values.")
+    factor(g)
 }
 
 .sep_reXterms <- function(spec, env) {
@@ -709,83 +714,4 @@ parseNumLevels <- function(levels) {
                    cnms = spec$margin_cnms,
                    product_cnms = spec$cnms),
               class = "separable_reXterms")
-}
-
-.sep_replace_reXterms <- function(reXterms, ss, aa, sepSpecs, env) {
-    if (is.null(sepSpecs) || !length(sepSpecs)) return(reXterms)
-    sep_pos <- which(ss == "separable")
-    for (i in sep_pos) {
-        id <- .sep_resolve_spec_id(aa[[i]], sepSpecs)
-        reXterms[[i]] <- .sep_reXterms(sepSpecs[[id]], env)
-    }
-    reXterms
-}
-
-.rewrite_separable_expr <- function(x, specs) {
-    ## Walk the formula call tree and rewrite rich separable calls into the
-    ## lower-level form that `reformulas::splitForm()` already understands:
-    ##
-    ##   separable(grid + 0 | group, <spec id>)
-    ##
-    ## The public syntax handled here is the product form:
-    ##
-    ##   separable(us(0 + member) %x% ar1(0 + time) | group,
-    ##             scale = us(0 + member))
-    ##
-    ## If a formula already contains the lower-level list form, leave it alone.
-    if (!is.call(x)) return(list(expr = x, specs = specs))
-    if (identical(.sep_call_name(x), "separable")) {
-        args <- as.list(x[-1])
-        nms <- names(args)
-        if (is.null(nms)) nms <- rep("", length(args))
-        scale_i <- which(nms == "scale")
-        if (length(scale_i) > 1L)
-            stop("separable() accepts at most one scale argument.")
-        scale_arg <- if (length(scale_i)) args[[scale_i]] else NULL
-        named_i <- which(nzchar(nms) & nms != "scale")
-        if (length(named_i) > 0L) {
-            stop("separable() only accepts named argument scale.")
-        }
-
-        unnamed_args <- args[!nzchar(nms)]
-        if (length(unnamed_args) == 1L) {
-            spec <- .sep_make_product_spec(unnamed_args[[1]], scale = scale_arg)
-            id <- length(specs) + 1L
-            specs[[id]] <- spec
-            return(list(expr = as.call(list(as.name("separable"),
-                                            spec$grid_expr,
-                                            as.integer(id))),
-                        specs = specs))
-        }
-
-        ## Leave the older internal low-level form `separable(grid, list(...))`
-        ## alone. New rewritten formulas use a numeric spec id instead.
-        if (length(unnamed_args) == 2L && is.call(unnamed_args[[2]]) &&
-            identical(.sep_call_name(unnamed_args[[2]]), "list") &&
-            is.null(scale_arg)) {
-            return(list(expr = x, specs = specs))
-        }
-
-        stop("separable() requires separable(",
-             "margin1(0 + variable) %x% margin2(0 + variable) | group).")
-    }
-    for (i in seq_along(x)[-1]) {
-        y <- .rewrite_separable_expr(x[[i]], specs)
-        x[[i]] <- y$expr
-        specs <- y$specs
-    }
-    list(expr = x, specs = specs)
-}
-
-rewrite_separable_formula <- function(f) {
-    ## Apply the rewrite only to the RHS.  We call this early in `glmmTMB()` for
-    ## conditional, zero-inflation, and dispersion formulas so all downstream
-    ## machinery sees a normal random-effect special.
-    if (!inherits(f, "formula")) return(f)
-    y <- .rewrite_separable_expr(f[[length(f)]], list())
-    f[[length(f)]] <- y$expr
-    if (length(y$specs) > 0L) {
-        attr(f, "separable_specs") <- y$specs
-    }
-    f
 }

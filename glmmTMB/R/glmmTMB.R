@@ -573,7 +573,8 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
 getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
                        contrasts, sparse=FALSE, old_smooths = NULL) {
 
-    has_re <- !is.null(findbars_x(formula))
+    ss <- splitForm(formula, specials = c(names(.valid_covstruct), "s"))
+    has_re <- any(ss$reTrmClasses != "s")
     has_smooths <- anySpecial(formula, specials = "s")
 
     ## fixed-effects model matrix X -
@@ -706,11 +707,8 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         }
     }
 
-    ## ran-effects model frame (for predvars)
-    ## important to COPY formula (and its environment)?
-    ranform <- formula
-
-    sepSpecs <- attr(formula, "separable_specs", exact = TRUE)
+    ## random-effects model frame (for predvars)
+    sepSpecs <- list()
 
     if (!has_re && !has_smooths) {
         reTrms <- reXterms <- NULL
@@ -721,24 +719,41 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
 
         ## FIXME: check whether predvars are carried along correctly in terms
         if (!ranOK) stop("no random effects allowed in ", type, " term")
-        ## FIXME: could use doublevert_split = FALSE here to preserve
-        ##  || -> diag() behaviour if we wanted (with new reformulas version)
-        RHSForm(ranform) <- subbars(RHSForm(reOnly(formula)))
 
-        if (has_re) {
-            mf$formula <- ranform
-            ## no_specials so that mkReTrms can handle it
-            reTrms <- mkReTrms(no_specials(
-                findbars_x(formula)),
-                fr, reorder.terms=FALSE, calc.lambdat=FALSE, sparse = TRUE)
-        } else {
-            ## dummy elements
-            reTrms <- list(Ztlist = list(), flist = list(), cnms = list(),
-                           theta = list())
+        sep_pos <- which(ss$reTrmClasses == "separable")
+        sepSpecs <- vector("list", length(ss$reTrmClasses))
+        if (length(sep_pos)) {
+            for (i in sep_pos) {
+                sepSpecs[[i]] <- .sep_make_product_spec_from_split(
+                    ss$reTrmFormulas[[i]], ss$reTrmAddArgs[[i]])
+            }
         }
 
-        ## formula <- Reaction ~ s(Days) + (1|Subject)
-        ss <- splitForm(formula, specials = c(names(.valid_covstruct), "s"))
+        if (!length(sep_pos)) {
+            mk_pos <- which(ss$reTrmClasses != "s")
+            if (has_re) {
+                ranform <- formula
+                RHSForm(ranform) <- subbars(RHSForm(reOnly(formula)))
+                mf$formula <- ranform
+                reTrms <- mkReTrms(no_specials(
+                    findbars_x(formula)),
+                    fr, reorder.terms=FALSE, calc.lambdat=FALSE, sparse = TRUE)
+            } else {
+                reTrms <- list(Ztlist = list(), flist = list(), cnms = list(),
+                               theta = list())
+            }
+        } else {
+            mk_pos <- which(!ss$reTrmClasses %in% c("s", "separable"))
+            if (length(mk_pos)) {
+                ## no_specials so that mkReTrms can handle ordinary covstructs
+                reTrms <- mkReTrms(no_specials(
+                    ss$reTrmFormulas[mk_pos]),
+                    fr, reorder.terms=FALSE, calc.lambdat=FALSE, sparse = TRUE)
+            } else {
+                reTrms <- list(Ztlist = list(), flist = list(), cnms = list(),
+                               theta = list())
+            }
+        }
 
         ## contains: c("Zt", "theta", "Lind", "Gp", "lower", "Lambdat", "flist", "cnms", "Ztlist", "nl")
         ## we only need "Zt", "flist", "Gp", "cnms", "Ztlist" (I think)
@@ -748,16 +763,17 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         ## need to fill in smooth terms in **correct locations**
         ## do we need to reconstitute
         ## post-process mkReTrms to add smooths (incorporate in mkReTrms?)
-        if (has_smooths) {
+        if (has_smooths || length(sep_pos)) {
             ns <- length(ss$reTrmClasses)
             augReTrms <- list(Ztlist = vector("list", ns),
-                              flist = vector("list", ns),
+                              flist = reTrms$flist,
                               cnms = vector("list", ns),
                               smooth_info = vector("list", ns))
-            barpos <- which(ss$reTrmClasses != "s")
+            barpos <- mk_pos
             nonbarpos <- which(ss$reTrmClasses == "s")
             for (p in c("Ztlist", "flist", "cnms")) {
                 ## fill in values from traditional (bar-containing) REs
+                if (p == "flist") next
                 augReTrms[[p]][barpos] <- reTrms[[p]]
                 names(augReTrms[[p]])[barpos] <- names(reTrms[[p]])
             }
@@ -774,35 +790,62 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
 
             ## only need one 'dummy' factor for all the smooth terms
             ff <- factor(rep(1, nobs))
-            augReTrms$flist <- c(reTrms$flist, list(dummy = ff))
             avec <- rep(NA_integer_, ns)
-            avec[barpos] <- attr(reTrms$flist, "assign")
-            ## mkReTrms returns more than we need (some is for lme4)
-            ##  ... which bits are actually used hereafter?
-            avec[nonbarpos] <-  length(augReTrms$flist)
+            if (length(barpos)) avec[barpos] <- attr(reTrms$flist, "assign")
+            if (length(nonbarpos)) {
+                augReTrms$flist <- c(augReTrms$flist, list(dummy = ff))
+                ## mkReTrms returns more than we need (some is for lme4)
+                ##  ... which bits are actually used hereafter?
+                avec[nonbarpos] <-  length(augReTrms$flist)
+            }
             attr(augReTrms$flist, "assign") <- avec
             ncol_fun <- function(x) if (is.null(x)) 0 else ncol(x)
             b_lens <- vapply(augReTrms$Ztlist, ncol_fun, FUN.VALUE = numeric(1))
-            for (i in seq_along(smooth_terms2)) {
-                s <- smooth_terms2[[i]]
-                pos <- nonbarpos[i]
-                Zt <- as(t(s$re$rand$Xr), "dgCMatrix")
-                b_lens[pos] <- ncol(Zt)
-                b_ind <- sum(b_lens[seq_along(b_lens)<i]) + seq(ncol(Zt))
-                ## perhaps redundant with b indices stored elsewhere
-                smooth_terms2[[i]]$re$b_ind <- b_ind
-                npar <- nrow(Zt)
-                augReTrms$Ztlist[[pos]] <- Zt
-                nm <- attr(s$re$rand$Xr, "s.label")
-                names(augReTrms$Ztlist)[pos] <- nm
-                ## cnms
-                augReTrms$cnms[[pos]] <- paste0("dummy", seq(npar))
-                names(augReTrms$cnms)[pos] <- "dummy"
+            if (length(nonbarpos)) {
+                for (i in seq_along(smooth_terms2)) {
+                    s <- smooth_terms2[[i]]
+                    pos <- nonbarpos[i]
+                    Zt <- as(t(s$re$rand$Xr), "dgCMatrix")
+                    b_lens[pos] <- ncol(Zt)
+                    b_ind <- sum(b_lens[seq_along(b_lens)<i]) + seq(ncol(Zt))
+                    ## perhaps redundant with b indices stored elsewhere
+                    smooth_terms2[[i]]$re$b_ind <- b_ind
+                    npar <- nrow(Zt)
+                    augReTrms$Ztlist[[pos]] <- Zt
+                    nm <- attr(s$re$rand$Xr, "s.label")
+                    names(augReTrms$Ztlist)[pos] <- nm
+                    ## cnms
+                    augReTrms$cnms[[pos]] <- paste0("dummy", seq(npar))
+                    names(augReTrms$cnms)[pos] <- "dummy"
+                }
+                ## store smooth info in relevant spots
+                for (i in seq_along(nonbarpos)) {
+                    augReTrms$smooth_info[[nonbarpos[i]]] <- smooth_terms2[[i]]
+                }
             }
-            ## store smooth info in relevant spots
-            for (i in seq_along(nonbarpos)) {
-                augReTrms$smooth_info[[nonbarpos[i]]] <- smooth_terms2[[i]]
+            for (i in sep_pos) {
+                spec <- sepSpecs[[i]]
+                group <- .sep_group_factor(spec$group, fr, environment(formula))
+                repl <- .sep_build_product_reterm(spec, fr, group,
+                                                  environment(formula))
+                group_name <- .sep_deparse(spec$group)
+                group_match <- which(names(augReTrms$flist) == group_name &
+                    vapply(augReTrms$flist, identical, logical(1), group))
+                if (length(group_match)) {
+                    avec[i] <- group_match[[1]]
+                } else {
+                    glist <- list(group)
+                    names(glist) <- group_name
+                    augReTrms$flist <- c(augReTrms$flist, glist)
+                    avec[i] <- length(augReTrms$flist)
+                }
+                augReTrms$Ztlist[[i]] <- repl$Zt
+                augReTrms$cnms[[i]] <- repl$cnms
+                names(augReTrms$Ztlist)[i] <- group_name
+                names(augReTrms$cnms)[i] <- group_name
+                sepSpecs[[i]] <- repl$spec
             }
+            attr(augReTrms$flist, "assign") <- avec
             ## reconstitute other pieces
             augReTrms$Zt <- do.call(rbind, augReTrms$Zt)
             augReTrms$Gp <- cumsum(c(0, vapply(augReTrms$Ztlist, nrow, 0L)))
@@ -810,11 +853,6 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
             ##
             reTrms <- augReTrms
         }
-
-        sep_re <- .sep_replace_product_reterms(reTrms, ss, sepSpecs, fr,
-                                               environment(formula))
-        reTrms <- sep_re$reTrms
-        sepSpecs <- sep_re$sepSpecs
 
         ss$reTrmClasses[ss$reTrmClasses == "s"] <- "homdiag"
         # FIX ME: migrate this (or something like it) down to reTrms,
@@ -824,7 +862,8 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         ## FIXME: make sure that eval() happens in the right environment/
         ##    document potential issues
         ## Changed from getting rank to extracting additional argument for propto
-        get_arg <- function(v) {
+        get_arg <- function(v, cls, i) {
+          if (cls == "separable") return(sepSpecs[[i]])
           if (length(v) == 1) return(NA_real_)
           payload <- v[[2]]
           ## rabbit-hole alert. Try to evaluate payload first in model frame,
@@ -838,7 +877,8 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
                                  call. = FALSE))
           return(res)
         }
-        aa <- lapply(ss$reTrmAddArgs, get_arg)
+        aa <- Map(get_arg, ss$reTrmAddArgs, ss$reTrmClasses,
+                  seq_along(ss$reTrmAddArgs))
 
         ## terms for the model matrix in each RE term
         ## this is imperfect: it should really be done in mkReTrms/mkBlist,
@@ -861,12 +901,14 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         ## HACK: should duplicate 'homdiag' definition, keep it as 's' (or call it 'mgcv_smooth")
         ##  so we can recognize it.
         ## Here, we're using the fact that the ...AddArgs stuff is still in an unevaluated form
-        drop_s <- function(f, a) {
-            if (identical(a[[1]], as.symbol('s'))) NA else termsfun(f)
+        drop_s <- function(f, a, cls, i) {
+            if (identical(a[[1]], as.symbol('s'))) return(NA)
+            if (cls == "separable") return(.sep_reXterms(sepSpecs[[i]],
+                                                          environment(formula)))
+            termsfun(f)
         }
-        reXterms <- Map(drop_s, ss$reTrmFormulas, ss$reTrmAddArgs)
-        reXterms <- .sep_replace_reXterms(reXterms, ss$reTrmClasses, aa,
-                                          sepSpecs, environment(formula))
+        reXterms <- Map(drop_s, ss$reTrmFormulas, ss$reTrmAddArgs,
+                        ss$reTrmClasses, seq_along(ss$reTrmFormulas))
         
         for (i in seq_along(ss$reTrmAddArgs)) {
           if(ss$reTrmClasses[i] == "rr") {
@@ -1366,9 +1408,6 @@ glmmTMB <- function(
     ## FIXME: denv leftover from lme4, not defined yet
 
     environment(formula) <- parent.frame()
-    user_formula <- formula
-    formula <- rewrite_separable_formula(formula)
-    call$formula <- mc$formula <- user_formula
     ## add offset-specified-as-argument to formula as + offset(...)
     ## need to evaluate offset within environment
     ## how do we figure out where offset exists/whether it has
@@ -1386,14 +1425,10 @@ glmmTMB <- function(
     }
 
     environment(ziformula) <- environment(formula)
-    user_ziformula <- ziformula
-    ziformula <- rewrite_separable_formula(ziformula)
-    call$ziformula <- user_ziformula
+    call$ziformula <- ziformula
 
     environment(dispformula) <- environment(formula)
-    user_dispformula <- dispformula
-    dispformula <- rewrite_separable_formula(dispformula)
-    call$dispformula <- user_dispformula
+    call$dispformula <- dispformula
 
     ## now work on evaluating model frame
     m <- match(c("data", "subset", "weights", "na.action", "offset"),
@@ -1418,13 +1453,19 @@ glmmTMB <- function(
     formList <- list(formula, ziformula, dispformula)
     sepgrid_cols <- .sepgrid_colnames(formula, ziformula, dispformula)
     sep_margin_vars <- .sep_margin_varnames(formula, ziformula, dispformula)
+    sep_model_vars <- .sep_margin_varnames(formula, ziformula, dispformula,
+                                           include_group = TRUE)
     for (i in seq_along(formList)) {
         f <- formList[[i]] ## abbreviate
+        f <- noSpecials(f, specials = "separable")
         ## substitute "|" by "+"; drop specials
         f <- noSpecials(sub_specials(f), delete=FALSE, specials = c(names(.valid_covstruct), "s"))
         formList[[i]] <- f
     }
     combForm <- do.call(addForm,formList)
+    if (length(sep_model_vars)) {
+        combForm <- addForm(combForm, stats::reformulate(sep_model_vars))
+    }
     environment(combForm) <- environment(formula)
     ## model.frame.default looks for these objects in the environment
     ## of the *formula* (see 'extras', which is anything passed in ...),

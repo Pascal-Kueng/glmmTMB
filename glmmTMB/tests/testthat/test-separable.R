@@ -943,13 +943,12 @@ test_that("separable specs handle product order", {
     expect_equal(u$condReStruc[[1]]$sepScaleSpec, 0L)
 })
 
-test_that("separable parser stores structured specs outside splitForm payload", {
+test_that("separable parser builds structured specs from splitForm output", {
     f <- y ~ 1 +
         separable(homcs(0 + member) %x% ar1(0 + time) | group,
                   scale = homcs(0 + member))
-    g <- glmmTMB:::rewrite_separable_formula(f)
-    ss <- reformulas::splitForm(g, specials = c(names(.valid_covstruct), "s"))
-    specs <- attr(g, "separable_specs")
+    ss <- reformulas::splitForm(f, specials = c(names(.valid_covstruct), "s"))
+    specs <- glmmTMB:::.sep_specs_from_split(ss)
     spec <- specs[[1]]
 
     expect_length(specs, 1)
@@ -960,24 +959,22 @@ test_that("separable parser stores structured specs outside splitForm payload", 
     expect_equal(unname(spec$scale$margins$var), "member")
     expect_equal(ss$reTrmClasses, "separable")
     expect_equal(deparse(ss$reTrmFormulas[[1]]),
-                 "0 + (0 + member + (0 + time)) | group")
-    expect_equal(length(ss$reTrmAddArgs[[1]]), 2)
-    expect_equal(eval(ss$reTrmAddArgs[[1]][[2]]), 1L)
+                 "homcs(0 + member) %x% ar1(0 + time) | group")
+    expect_equal(deparse(ss$reTrmAddArgs[[1]]),
+                 "separable(scale = homcs(0 + member))")
 })
 
 test_that("separable parser flattens product chains and records scale syntax", {
     f <- y ~ 1 +
         separable(us(0 + member) %x% ar1(0 + time) %x% cs(0 + item) | group,
                   scale = product(us(0 + member), cs(0 + item)))
-    g <- glmmTMB:::rewrite_separable_formula(f)
-    spec <- attr(g, "separable_specs")[[1]]
+    ss <- reformulas::splitForm(f, specials = c(names(.valid_covstruct), "s"))
+    spec <- glmmTMB:::.sep_specs_from_split(ss)[[1]]
 
     expect_equal(spec$grid, c("member", "time", "item"))
     expect_equal(spec$margins$struc, c("us", "ar1", "cs"))
     expect_equal(spec$scale$mode, "selected_product")
     expect_equal(spec$scale$margins$struc, c("us", "cs"))
-    expect_equal(deparse(g[[3]][[3]][[2]]),
-                 "0 + (0 + member + (0 + time) + (0 + item)) | group")
 })
 
 test_that("separable frontend parses simple existing covariance margins", {
@@ -985,8 +982,8 @@ test_that("separable frontend parses simple existing covariance margins", {
         separable(diag(0 + member) %x% ar1(0 + time) %x%
                       homtoep(0 + item) | group,
                   scale = product(diag(0 + member), homtoep(0 + item)))
-    g <- glmmTMB:::rewrite_separable_formula(f)
-    spec <- attr(g, "separable_specs")[[1]]
+    ss <- reformulas::splitForm(f, specials = c(names(.valid_covstruct), "s"))
+    spec <- glmmTMB:::.sep_specs_from_split(ss)[[1]]
 
     expect_equal(spec$grid, c("member", "time", "item"))
     expect_equal(spec$margins$struc, c("diag", "ar1", "homtoep"))
@@ -998,14 +995,18 @@ test_that("separable parser records global and product scale modes", {
     f_global <- y ~ 1 +
         separable(ar1(0 + member) %x% ar1(0 + time) | group,
                   scale = global())
-    g_global <- glmmTMB:::rewrite_separable_formula(f_global)
-    expect_equal(attr(g_global, "separable_specs")[[1]]$scale$mode, "global")
+    ss_global <- reformulas::splitForm(f_global,
+                                       specials = c(names(.valid_covstruct), "s"))
+    expect_equal(glmmTMB:::.sep_specs_from_split(ss_global)[[1]]$scale$mode,
+                 "global")
 
     f_product <- y ~ 1 +
         separable(us(0 + member) %x% cs(0 + item) | group,
                   scale = product())
-    g_product <- glmmTMB:::rewrite_separable_formula(f_product)
-    expect_equal(attr(g_product, "separable_specs")[[1]]$scale$mode, "product")
+    ss_product <- reformulas::splitForm(f_product,
+                                        specials = c(names(.valid_covstruct), "s"))
+    expect_equal(glmmTMB:::.sep_specs_from_split(ss_product)[[1]]$scale$mode,
+                 "product")
 })
 
 test_that("separable selected product scale validates its margins", {
