@@ -278,6 +278,8 @@ parseNumLevels <- function(levels) {
                                 function(n) n - 1L)
 )
 
+## Each supported separable density kind must have a C++ margin builder that
+## returns a standard-deviation vector and a correlation matrix.
 .sep_density_kind_code <- c(
     dense_corr = 1L,
     ar1 = 2L,
@@ -295,23 +297,9 @@ parseNumLevels <- function(levels) {
     selected_product = 4L    # selected margin scales multiply
 )
 
-.sep_corr_matrix_codes <- list(
-    dense_corr = c("cs", "homcs", "us"),
-    ar1 = c("ar1", "hetar1"),
-    diag = c("diag", "homdiag"),
-    spatial = c("ou", "exp", "gau", "mat"),
-    toep = c("toep", "homtoep")
-)
-
 .sep_dispatch <- function(regs) {
     kinds <- vapply(regs, `[[`, character(1), "density_kind")
-    codes <- vapply(regs, `[[`, character(1), "code")
-    for (i in seq_along(regs)) {
-        if (!kinds[[i]] %in% names(.sep_corr_matrix_codes) ||
-            !codes[[i]] %in% .sep_corr_matrix_codes[[kinds[[i]]]]) {
-            return(NA_character_)
-        }
-    }
+    if (!all(kinds %in% names(.sep_density_kind_code))) return(NA_character_)
     "corr_matrix_product"
 }
 
@@ -415,10 +403,14 @@ parseNumLevels <- function(levels) {
 .sep_stop_unsupported_dispatch <- function(margins, regs, scale = NULL) {
     ## Diagnose scale errors before reporting unsupported density combinations.
     .sep_scale_info(margins, regs, scale)
+    supported <- names(.sep_margin_registry)[
+        vapply(.sep_margin_registry, function(x) {
+            x$density_kind %in% names(.sep_density_kind_code)
+        }, logical(1))
+    ]
     stop("separable() frontend parsed ", .sep_margin_label(margins),
-         ", but the backend currently only evaluates products among diag(), ",
-         "homdiag(), ar1(), hetar1(), cs(), homcs(), us(), ou(), exp(), ",
-         "gau(), mat(), toep(), and homtoep().")
+         ", but the backend currently only evaluates products among ",
+         paste0(supported, "()", collapse = ", "), ".")
 }
 
 .sep_spatial_info <- function(margins, spec, dims) {

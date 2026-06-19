@@ -546,6 +546,40 @@ bool is_spatial_margin(int code) {
 }
 
 template <class Type>
+bool separable_margin_has_scale(per_term_info<Type>& term, int m) {
+  for (int i = 0; i < term.sepScaleSpec.size(); i++)
+    if (term.sepScaleSpec(i) == m) return true;
+  return false;
+}
+
+struct sep_margin_spec {
+  int code;
+  int kind;
+  int n;
+  int index;
+  bool scale;
+};
+
+template <class Type>
+sep_margin_spec separable_margin_spec(per_term_info<Type>& term, int m) {
+  sep_margin_spec spec;
+  spec.code = term.sepCodes(m);
+  spec.kind = term.sepDensityKinds(m);
+  spec.n = term.sepDims(m);
+  spec.index = m;
+  spec.scale = separable_margin_has_scale(term, m);
+  return spec;
+}
+
+bool separable_margin_has_homogeneous_sd(const sep_margin_spec& margin) {
+  return margin.kind == spatial_sep ||
+    margin.code == homdiag_covstruct ||
+    margin.code == homcs_covstruct ||
+    margin.code == ar1_covstruct ||
+    margin.code == homtoep_covstruct;
+}
+
+template <class Type>
 matrix<Type> compound_symmetry_corr(int n, Type corr_transf) {
   Type a = Type(1) / (Type(n) - Type(1));
   Type rho = invlogit(corr_transf) * (Type(1) + a) - a;
@@ -565,73 +599,70 @@ matrix<Type> identity_corr(int n) {
 }
 
 template <class Type>
-void parse_separable_margin_sd(int code, int hom_code, int n,
+void parse_separable_margin_sd(const sep_margin_spec& margin,
 			       const vector<Type>& theta, int& theta_pos,
-			       bool scale_here, vector<Type>& margin_sd) {
-  margin_sd.resize(n);
+			       vector<Type>& margin_sd) {
+  margin_sd.resize(margin.n);
   margin_sd.fill(Type(1));
-  if (!scale_here) return;
+  if (!margin.scale) return;
 
-  if (code == hom_code) {
+  if (separable_margin_has_homogeneous_sd(margin)) {
     margin_sd.fill(exp(theta(theta_pos++)));
   } else {
-    vector<Type> logsd = theta.segment(theta_pos, n);
-    theta_pos += n;
+    vector<Type> logsd = theta.segment(theta_pos, margin.n);
+    theta_pos += margin.n;
     margin_sd = exp(logsd);
   }
 }
 
 template <class Type>
-void parse_separable_dense_margin(int code, int n, const vector<Type>& theta,
-				  int& theta_pos, bool scale_here,
+void parse_separable_dense_margin(const sep_margin_spec& margin,
+				  const vector<Type>& theta, int& theta_pos,
 				  vector<Type>& margin_sd,
 				  matrix<Type>& corr,
 				  vector<Type>& us_corr_params) {
-  if (!is_dense_corr_margin(code))
+  if (!is_dense_corr_margin(margin.code))
     error("unsupported dense margin for separable covariance structure");
 
-  parse_separable_margin_sd(code, homcs_covstruct, n, theta, theta_pos,
-			    scale_here, margin_sd);
+  parse_separable_margin_sd(margin, theta, theta_pos, margin_sd);
 
-  if (code == cs_covstruct || code == homcs_covstruct) {
-    corr = compound_symmetry_corr(n, theta(theta_pos++));
+  if (margin.code == cs_covstruct || margin.code == homcs_covstruct) {
+    corr = compound_symmetry_corr(margin.n, theta(theta_pos++));
   } else {
-    int n_corr = n * (n - 1) / 2;
+    int n_corr = margin.n * (margin.n - 1) / 2;
     us_corr_params = theta.segment(theta_pos, n_corr);
     theta_pos += n_corr;
   }
 }
 
 template <class Type>
-void parse_separable_diag_margin(int code, int n, const vector<Type>& theta,
-				 int& theta_pos, bool scale_here,
+void parse_separable_diag_margin(const sep_margin_spec& margin,
+				 const vector<Type>& theta, int& theta_pos,
 				 vector<Type>& margin_sd,
 				 matrix<Type>& corr) {
-  if (!is_diag_margin(code))
+  if (!is_diag_margin(margin.code))
     error("unsupported diagonal margin for separable covariance structure");
 
-  parse_separable_margin_sd(code, homdiag_covstruct, n, theta, theta_pos,
-			    scale_here, margin_sd);
-  corr = identity_corr<Type>(n);
+  parse_separable_margin_sd(margin, theta, theta_pos, margin_sd);
+  corr = identity_corr<Type>(margin.n);
 }
 
 template <class Type>
-void parse_separable_toep_margin(int code, int n, const vector<Type>& theta,
-				 int& theta_pos, bool scale_here,
+void parse_separable_toep_margin(const sep_margin_spec& margin,
+				 const vector<Type>& theta, int& theta_pos,
 				 vector<Type>& margin_sd,
 				 matrix<Type>& corr) {
-  if (!is_toep_margin(code))
+  if (!is_toep_margin(margin.code))
     error("unsupported Toeplitz margin for separable covariance structure");
 
-  parse_separable_margin_sd(code, homtoep_covstruct, n, theta, theta_pos,
-			    scale_here, margin_sd);
+  parse_separable_margin_sd(margin, theta, theta_pos, margin_sd);
 
-  vector<Type> corr_params = theta.segment(theta_pos, n - 1);
-  theta_pos += n - 1;
+  vector<Type> corr_params = theta.segment(theta_pos, margin.n - 1);
+  theta_pos += margin.n - 1;
   corr_params = corr_params / sqrt(Type(1) + corr_params * corr_params);
-  corr.resize(n, n);
-  for (int i = 0; i < n; i++)
-    for (int j = 0; j < n; j++)
+  corr.resize(margin.n, margin.n);
+  for (int i = 0; i < margin.n; i++)
+    for (int j = 0; j < margin.n; j++)
       corr(i, j) = (i == j ? Type(1) :
 		    corr_params((i > j ? i - j : j - i) - 1));
 }
@@ -654,27 +685,24 @@ matrix<Type> separable_margin_dist(per_term_info<Type>& term, int m) {
 }
 
 template <class Type>
-void parse_separable_spatial_margin(int code, int n, const vector<Type>& theta,
-				    int& theta_pos, bool scale_here,
+void parse_separable_spatial_margin(const sep_margin_spec& margin,
+				    const vector<Type>& theta, int& theta_pos,
 				    const matrix<Type>& dist,
 				    vector<Type>& margin_sd,
 				    matrix<Type>& corr) {
-  if (!is_spatial_margin(code))
+  if (!is_spatial_margin(margin.code))
     error("unsupported spatial margin for separable covariance structure");
 
-  margin_sd.resize(n);
-  margin_sd.fill(Type(1));
-  if (scale_here)
-    margin_sd.fill(exp(theta(theta_pos++)));
-  corr.resize(n, n);
+  parse_separable_margin_sd(margin, theta, theta_pos, margin_sd);
+  corr.resize(margin.n, margin.n);
 
   Type theta0 = theta(theta_pos++);
   Type theta1 = Type(0);
-  if (code == mat_covstruct) theta1 = theta(theta_pos++);
+  if (margin.code == mat_covstruct) theta1 = theta(theta_pos++);
 
-  for (int i = 0; i < n; i++) {
-    for (int j = 0; j < n; j++) {
-      switch (code) {
+  for (int i = 0; i < margin.n; i++) {
+    for (int j = 0; j < margin.n; j++) {
+      switch (margin.code) {
       case ou_covstruct:
 	corr(i, j) = (i == j ? Type(1) : exp(-exp(theta0) * dist(i, j)));
 	break;
@@ -694,13 +722,6 @@ void parse_separable_spatial_margin(int code, int n, const vector<Type>& theta,
       }
     }
   }
-}
-
-template <class Type>
-bool separable_margin_has_scale(per_term_info<Type>& term, int m) {
-  for (int i = 0; i < term.sepScaleSpec.size(); i++)
-    if (term.sepScaleSpec(i) == m) return true;
-  return false;
 }
 
 template <class Type>
@@ -764,14 +785,13 @@ Type parse_ar1_phi(const vector<Type>& theta, int& theta_pos) {
 }
 
 template <class Type>
-void parse_separable_ar1_margin(int code, int n, const vector<Type>& theta,
-				int& theta_pos, bool scale_here,
+void parse_separable_ar1_margin(const sep_margin_spec& margin,
+				const vector<Type>& theta, int& theta_pos,
 				vector<Type>& margin_sd, Type& phi) {
-  if (code != ar1_covstruct && code != hetar1_covstruct)
+  if (margin.code != ar1_covstruct && margin.code != hetar1_covstruct)
     error("unsupported AR1 margin for separable covariance structure");
 
-  parse_separable_margin_sd(code, ar1_covstruct, n, theta, theta_pos,
-			    scale_here, margin_sd);
+  parse_separable_margin_sd(margin, theta, theta_pos, margin_sd);
   phi = parse_ar1_phi(theta, theta_pos);
 }
 
@@ -833,44 +853,38 @@ bool is_separable_corr_matrix_kind(int kind) {
 }
 
 template <class Type>
-struct sep_corr_margin_pars {
+struct sep_margin_cov {
   vector<Type> sd;
   matrix<Type> corr;
 };
 
 template <class Type>
-sep_corr_margin_pars<Type> parse_separable_corr_margin(int code, int kind,
-						       int n,
-						       const vector<Type>& theta,
-						       int& theta_pos,
-						       bool scale_here,
-						       per_term_info<Type>& term,
-						       int m) {
-  sep_corr_margin_pars<Type> out;
+sep_margin_cov<Type> build_separable_margin_cov(sep_margin_spec margin,
+						const vector<Type>& theta,
+						int& theta_pos,
+						per_term_info<Type>& term) {
+  sep_margin_cov<Type> out;
 
-  if (kind == diag_sep) {
-    parse_separable_diag_margin(code, n, theta, theta_pos, scale_here,
-				out.sd, out.corr);
-  } else if (kind == ar1_sep) {
+  if (margin.kind == diag_sep) {
+    parse_separable_diag_margin(margin, theta, theta_pos, out.sd, out.corr);
+  } else if (margin.kind == ar1_sep) {
     Type phi = Type(0);
-    parse_separable_ar1_margin(code, n, theta, theta_pos, scale_here,
-			       out.sd, phi);
-    out.corr = ar1_corr(n, phi);
-  } else if (kind == dense_corr_sep) {
+    parse_separable_ar1_margin(margin, theta, theta_pos, out.sd, phi);
+    out.corr = ar1_corr(margin.n, phi);
+  } else if (margin.kind == dense_corr_sep) {
     vector<Type> us_corr_params(0);
-    parse_separable_dense_margin(code, n, theta, theta_pos, scale_here,
-				 out.sd, out.corr, us_corr_params);
-    if (code == us_covstruct) {
+    parse_separable_dense_margin(margin, theta, theta_pos, out.sd,
+				 out.corr, us_corr_params);
+    if (margin.code == us_covstruct) {
       density::UNSTRUCTURED_CORR_t<Type> us_density(us_corr_params);
       out.corr = us_density.cov();
     }
-  } else if (kind == toep_sep) {
-    parse_separable_toep_margin(code, n, theta, theta_pos, scale_here,
-				out.sd, out.corr);
-  } else if (kind == spatial_sep) {
-    matrix<Type> dist = separable_margin_dist(term, m);
-    parse_separable_spatial_margin(code, n, theta, theta_pos, scale_here,
-				   dist, out.sd, out.corr);
+  } else if (margin.kind == toep_sep) {
+    parse_separable_toep_margin(margin, theta, theta_pos, out.sd, out.corr);
+  } else if (margin.kind == spatial_sep) {
+    matrix<Type> dist = separable_margin_dist(term, margin.index);
+    parse_separable_spatial_margin(margin, theta, theta_pos, dist,
+				   out.sd, out.corr);
   } else {
     error("unsupported separable margin for correlation-matrix evaluator");
   }
@@ -921,11 +935,9 @@ sep_corr_product_pars<Type> parse_separable_corr_product(const vector<Type>& the
   vector<vector<Type> > margin_sd(n_margin);
   out.margin_corr.reserve(n_margin);
   for (int m = 0; m < n_margin; m++) {
-    sep_corr_margin_pars<Type> margin =
-      parse_separable_corr_margin(term.sepCodes(m), term.sepDensityKinds(m),
-				  term.sepDims(m), theta, theta_pos,
-				  separable_margin_has_scale(term, m),
-				  term, m);
+    sep_margin_spec spec = separable_margin_spec(term, m);
+    sep_margin_cov<Type> margin =
+      build_separable_margin_cov(spec, theta, theta_pos, term);
     margin_sd(m) = margin.sd;
     out.margin_corr.push_back(margin.corr);
     if (m == 0) {
