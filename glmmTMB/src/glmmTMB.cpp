@@ -112,7 +112,7 @@ enum separable_density_kind {
 
 enum separable_dispatch {
   // Evaluator codes for separable covariance structures.
-  corr_corr_dispatch = 1
+  corr_matrix_product_dispatch = 1
 };
 
 enum separable_scale_mode {
@@ -813,41 +813,9 @@ void parse_separable_ar1_margin(int code, int n, const vector<Type>& theta,
 }
 
 template <class Type>
-void report_separable_2d(const vector<Type>& cell_sd,
-			 const matrix<Type>& corr0,
-			 const matrix<Type>& corr1,
-			 per_term_info<Type>& term) {
-  // Build report objects for VarCorr().
-  int n0 = term.sepDims(0);
-  int n1 = term.sepDims(1);
-  term.sd = cell_sd;
-  if (term.fullCor == 1) {
-    // Construct the full correlation only for reporting/testing.
-    int n = n0 * n1;
-    term.corr.resize(n, n);
-    for (int b1 = 0; b1 < n1; b1++) {
-      for (int a1 = 0; a1 < n0; a1++) {
-        int k1 = a1 + n0 * b1;
-        for (int b2 = 0; b2 < n1; b2++) {
-          for (int a2 = 0; a2 < n0; a2++) {
-            int k2 = a2 + n0 * b2;
-            term.corr(k1, k2) = corr0(a1, a2) * corr1(b1, b2);
-          }
-        }
-      }
-    }
-  } else {
-    // Follow the existing compact-report convention for structured covariance
-    // terms that do not store the whole correlation matrix.
-    term.corr.resize(1,1);
-    term.corr(0,0) = NAN;
-  }
-}
-
-template <class Type>
-void report_separable_dense(const vector<Type>& cell_sd,
-			    const matrix<Type>& corr,
-			    per_term_info<Type>& term) {
+void report_separable_product(const vector<Type>& cell_sd,
+			      const matrix<Type>& corr,
+			      per_term_info<Type>& term) {
   term.sd = cell_sd;
   if (term.fullCor == 1) {
     term.corr = corr;
@@ -860,11 +828,11 @@ void report_separable_dense(const vector<Type>& cell_sd,
 template <class Type, class Density0, class Density1>
 Type eval_separable_2d(array<Type> &U, const vector<Type>& cell_sd,
 		       Density0 density0, Density1 density1,
-		       const matrix<Type>& corr0, const matrix<Type>& corr1,
+		       const matrix<Type>& corr,
 		       per_term_info<Type>& term) {
   Type ans = separable_2d_nll(U, cell_sd, density0, density1, term);
   DISABLE_AD {
-    report_separable_2d(cell_sd, corr0, corr1, term);
+    report_separable_product(cell_sd, corr, term);
   }
   return ans;
 }
@@ -875,7 +843,7 @@ Type eval_separable_3d(array<Type> &U, const vector<Type>& cell_sd,
 		       const matrix<Type>& corr, per_term_info<Type>& term) {
   Type ans = separable_3d_nll(U, cell_sd, density0, density1, density2, term);
   DISABLE_AD {
-    report_separable_dense(cell_sd, corr, term);
+    report_separable_product(cell_sd, corr, term);
   }
   return ans;
 }
@@ -889,7 +857,7 @@ Type eval_separable_4d(array<Type> &U, const vector<Type>& cell_sd,
   Type ans = separable_4d_nll(U, cell_sd, density0, density1, density2,
 			      density3, term);
   DISABLE_AD {
-    report_separable_dense(cell_sd, corr, term);
+    report_separable_product(cell_sd, corr, term);
   }
   return ans;
 }
@@ -910,7 +878,7 @@ Type eval_separable_dense(array<Type> &U, const vector<Type>& cell_sd,
     ans += density(z) + logscale;
   }
   DISABLE_AD {
-    report_separable_dense(cell_sd, corr, term);
+    report_separable_product(cell_sd, corr, term);
   }
   return ans;
 }
@@ -967,7 +935,7 @@ sep_corr_margin_pars<Type> parse_separable_corr_margin(int code, int kind,
 }
 
 template <class Type>
-struct sep_corr_corr_pars {
+struct sep_corr_product_pars {
   vector<Type> cell_sd;
   matrix<Type> corr0;
   matrix<Type> corr1;
@@ -994,9 +962,9 @@ matrix<Type> kronecker_corr(const matrix<Type>& left,
 }
 
 template <class Type>
-sep_corr_corr_pars<Type> parse_separable_corr_corr(const vector<Type>& theta,
-						   per_term_info<Type>& term) {
-  sep_corr_corr_pars<Type> out;
+sep_corr_product_pars<Type> parse_separable_corr_product(const vector<Type>& theta,
+							 per_term_info<Type>& term) {
+  sep_corr_product_pars<Type> out;
   int n_margin = term.sepDims.size();
   for (int m = 0; m < n_margin; m++) {
     int kind = term.sepDensityKinds(m);
@@ -1498,13 +1466,13 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
 
     check_separable_metadata(term);
     switch (term.sepDispatch(0)) {
-    case corr_corr_dispatch: {
-      sep_corr_corr_pars<Type> sep = parse_separable_corr_corr(theta, term);
+    case corr_matrix_product_dispatch: {
+      sep_corr_product_pars<Type> sep = parse_separable_corr_product(theta, term);
       if (term.sepDims.size() == 2) {
 	density::MVNORM_t<Type> density0(sep.corr0);
 	density::MVNORM_t<Type> density1(sep.corr1);
 	ans += eval_separable_2d(U, sep.cell_sd, density0, density1,
-				 sep.corr0, sep.corr1, term);
+				 sep.corr, term);
       } else if (term.sepDims.size() == 3) {
 	density::MVNORM_t<Type> density0(sep.corr0);
 	density::MVNORM_t<Type> density1(sep.corr1);

@@ -293,7 +293,7 @@ parseNumLevels <- function(levels) {
     toep = 5L
 )
 
-.sep_dispatch_code <- c(corr_corr = 1L)
+.sep_dispatch_code <- c(corr_matrix_product = 1L)
 
 .sep_scale_mode_code <- c(
     margin = 1L,          # one margin supplies absolute SDs
@@ -319,7 +319,7 @@ parseNumLevels <- function(levels) {
             return(NA_character_)
         }
     }
-    "corr_corr"
+    "corr_matrix_product"
 }
 
 .sep_margin_label <- function(x) {
