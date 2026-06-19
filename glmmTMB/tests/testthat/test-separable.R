@@ -40,9 +40,11 @@ fit_fixed_theta <- function(form, dd, theta) {
 make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
                           n_member = 2, n_time = 3,
                           scale_mode = c("margin", "global", "product",
-                                         "selected_product")) {
+                                         "selected_product"),
+                          ar1_struc = c("ar1", "hetar1")) {
     struc <- match.arg(struc)
     scale_mode <- match.arg(scale_mode)
+    ar1_struc <- match.arg(ar1_struc)
     rho <- switch(struc, cs = 0.2, homcs = 0.3, us = -0.25)
     phi <- switch(struc, cs = 0.45, homcs = 0.4, us = 0.5)
     sd <- switch(struc,
@@ -50,6 +52,8 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
         homcs = 2,
         us = seq(0.8, 1.2, length.out = n_member)
     )
+    time_sd <- if (ar1_struc == "hetar1") seq(1.1, 1.4, length.out = n_time)
+               else rep(1, n_time)
     global_sd <- 1.4
 
     R_member <- if (struc %in% c("cs", "homcs")) {
@@ -77,6 +81,9 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
     } else {
         c(member_scale_theta, member_corr_theta)
     }
+    time_scale_theta <- if (ar1_struc == "hetar1" &&
+                            scale_mode == "product") log(time_sd) else numeric()
+    time_theta <- c(time_scale_theta, ar1_to_theta(phi))
     scale_call <- switch(scale_mode,
         margin = NULL,
         global = quote(global()),
@@ -92,7 +99,10 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
         as.call(args)
     }
     dense_call <- as.call(list(as.name(struc), quote(0 + member)))
-    ar1_call <- quote(ar1(0 + time))
+    ar1_call <- margin_call(ar1_struc, "time")
+    member_sd_active <- if (scale_mode == "global") rep(1, n_member)
+                        else if (length(sd) == 1) rep(sd, n_member) else sd
+    time_sd_active <- if (scale_mode == "product") time_sd else rep(1, n_time)
 
     if (reversed) {
         form <- as.formula(as.call(list(quote(`~`), quote(y),
@@ -101,21 +111,24 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
                                                ar1_call, dense_call))))))))
         dense_form <- y ~ 1 + us(sepgrid(time, member) + 0 | group)
         theta <- if (scale_mode == "global") {
-            c(log(global_sd), ar1_to_theta(phi), member_theta)
+            c(log(global_sd), time_theta, member_theta)
         } else {
-            c(ar1_to_theta(phi), member_theta)
+            c(time_theta, member_theta)
         }
         R_full <- kronecker(R_member, R_time)
         sd_full <- if (scale_mode == "global") {
             rep(global_sd, n_member * n_time)
-        } else if (length(sd) == 1) {
-            rep(sd, n_member * n_time)
         } else {
-            rep(sd, each = n_time)
+            as.vector(outer(time_sd_active, member_sd_active))
         }
-        codes <- unname(c(.valid_covstruct[["ar1"]], .valid_covstruct[[struc]]))
+        codes <- unname(c(.valid_covstruct[[ar1_struc]],
+                          .valid_covstruct[[struc]]))
         kinds <- c(2L, 1L)
-        scale_spec <- if (scale_mode == "global") integer() else 1L
+        scale_spec <- switch(scale_mode,
+            global = integer(),
+            margin = 1L,
+            product = if (ar1_struc == "hetar1") c(0L, 1L) else 1L,
+            selected_product = 1L)
     } else {
         form <- as.formula(as.call(list(quote(`~`), quote(y),
             as.call(list(quote(`+`), 1,
@@ -123,21 +136,24 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
                                                dense_call, ar1_call))))))))
         dense_form <- y ~ 1 + us(sepgrid(member, time) + 0 | group)
         theta <- if (scale_mode == "global") {
-            c(log(global_sd), member_theta, ar1_to_theta(phi))
+            c(log(global_sd), member_theta, time_theta)
         } else {
-            c(member_theta, ar1_to_theta(phi))
+            c(member_theta, time_theta)
         }
         R_full <- kronecker(R_time, R_member)
         sd_full <- if (scale_mode == "global") {
             rep(global_sd, n_member * n_time)
-        } else if (length(sd) == 1) {
-            rep(sd, n_member * n_time)
         } else {
-            rep(sd, n_time)
+            as.vector(outer(member_sd_active, time_sd_active))
         }
-        codes <- unname(c(.valid_covstruct[[struc]], .valid_covstruct[["ar1"]]))
+        codes <- unname(c(.valid_covstruct[[struc]],
+                          .valid_covstruct[[ar1_struc]]))
         kinds <- c(1L, 2L)
-        scale_spec <- if (scale_mode == "global") integer() else 0L
+        scale_spec <- switch(scale_mode,
+            global = integer(),
+            margin = 0L,
+            product = if (ar1_struc == "hetar1") c(0L, 1L) else 0L,
+            selected_product = 0L)
     }
 
     scale_mode_code <- switch(scale_mode,
@@ -214,6 +230,20 @@ make_diag_margin <- function(struc = c("diag", "homdiag"), n = 2,
         R = diag(n),
         scale_theta = log(if (struc == "homdiag") sd[[1]] else sd),
         corr_theta = numeric()
+    )
+}
+
+make_ar1_margin <- function(struc = c("ar1", "hetar1"), n = 3,
+                            sd = seq(0.9, 1.3, length.out = n),
+                            phi = 0.4) {
+    struc <- match.arg(struc)
+    R <- outer(seq_len(n), seq_len(n), function(i, j) phi^abs(i - j))
+    list(
+        struc = struc,
+        sd = if (struc == "hetar1") sd else rep(1, n),
+        R = R,
+        scale_theta = if (struc == "hetar1") log(sd) else numeric(),
+        corr_theta = ar1_to_theta(phi)
     )
 }
 
@@ -306,43 +336,91 @@ make_sep_dense_dense_case <- function(struc0 = c("cs", "homcs", "us"),
              selected_first = 0L, selected_second = 1L))
 }
 
-make_sep_ar1_ar1_case <- function(n0 = 3, n1 = 4, phi0 = 0.35, phi1 = 0.55) {
+make_sep_ar1_ar1_case <- function(struc0 = c("ar1", "hetar1"),
+                                  struc1 = c("ar1", "hetar1"),
+                                  scale_mode = c("global", "margin",
+                                                 "product",
+                                                 "selected_first",
+                                                 "selected_second"),
+                                  n0 = 3, n1 = 4, phi0 = 0.35, phi1 = 0.55) {
+    struc0 <- match.arg(struc0)
+    struc1 <- match.arg(struc1)
+    scale_mode <- match.arg(scale_mode)
+    m0 <- make_ar1_margin(struc0, n0, phi = phi0)
+    m1 <- make_ar1_margin(struc1, n1,
+                          sd = seq(1.1, 1.5, length.out = n1),
+                          phi = phi1)
     global_sd <- 1.25
     dd <- expand.grid(time0 = factor(seq_len(n0)),
                       time1 = factor(seq_len(n1)),
                       group = factor(seq_len(2)))
     dd$y <- 0
-    form <- y ~ 1 +
-        separable(ar1(0 + time0) %x% ar1(0 + time1) | group,
-                  scale = global())
-    R0 <- outer(seq_len(n0), seq_len(n0), function(i, j) phi0^abs(i - j))
-    R1 <- outer(seq_len(n1), seq_len(n1), function(i, j) phi1^abs(i - j))
-    R_full <- kronecker(R1, R0)
-    sd_full <- rep(global_sd, n0 * n1)
+
+    call0 <- margin_call(struc0, "time0")
+    call1 <- margin_call(struc1, "time1")
+    scale_call <- switch(scale_mode,
+        global = quote(global()),
+        margin = NULL,
+        product = quote(product()),
+        selected_first = as.call(list(as.name("product"), call0)),
+        selected_second = as.call(list(as.name("product"), call1))
+    )
+    sep_args <- list(
+        as.name("separable"),
+        as.call(list(as.name("|"),
+                     as.call(list(as.name("%x%"), call0, call1)),
+                     quote(group)))
+    )
+    if (!is.null(scale_call)) sep_args$scale <- scale_call
+    sep_call <- as.call(sep_args)
+    form <- as.formula(as.call(list(quote(`~`), quote(y),
+        as.call(list(quote(`+`), 1, sep_call)))))
+
+    scale_index <- switch(scale_mode,
+        global = integer(),
+        margin = which(c(struc0, struc1) == "hetar1"),
+        product = which(c(struc0, struc1) == "hetar1"),
+        selected_first = 1L,
+        selected_second = 2L)
+    theta0 <- c(if (1L %in% scale_index) m0$scale_theta, m0$corr_theta)
+    theta1 <- c(if (2L %in% scale_index) m1$scale_theta, m1$corr_theta)
+    theta <- if (scale_mode == "global") c(log(global_sd), theta0, theta1)
+             else c(theta0, theta1)
+
+    R_full <- kronecker(m1$R, m0$R)
+    sd0 <- if (1L %in% scale_index) m0$sd else rep(1, n0)
+    sd1 <- if (2L %in% scale_index) m1$sd else rep(1, n1)
+    sd_full <- if (scale_mode == "global") rep(global_sd, n0 * n1)
+               else as.vector(outer(sd0, sd1))
 
     list(form = form,
          dense_form = y ~ 1 + us(sepgrid(time0, time1) + 0 | group),
          dd = dd,
-         theta = c(log(global_sd), ar1_to_theta(phi0), ar1_to_theta(phi1)),
+         theta = theta,
          theta_dense = c(log(sd_full), put_cor(R_full)),
          R_full = R_full,
          sd_full = sd_full,
-         codes = unname(c(.valid_covstruct[["ar1"]],
-                          .valid_covstruct[["ar1"]])),
+         codes = unname(c(.valid_covstruct[[struc0]],
+                          .valid_covstruct[[struc1]])),
          kinds = c(2L, 2L),
          dispatch = 3L,
-         scale_mode = 2L,
-         scale_spec = integer())
+         scale_mode = switch(scale_mode,
+             margin = 1L, global = 2L, product = 3L,
+             selected_first = 4L, selected_second = 4L),
+         scale_spec = as.integer(scale_index - 1L))
 }
 
 make_sep_diag_ar1_case <- function(struc = c("diag", "homdiag"),
                                    reversed = FALSE,
                                    scale_mode = c("margin", "global",
                                                   "product", "selected"),
-                                   n_diag = 3, n_time = 4, phi = 0.45) {
+                                   n_diag = 3, n_time = 4, phi = 0.45,
+                                   ar1_struc = c("ar1", "hetar1")) {
     struc <- match.arg(struc)
     scale_mode <- match.arg(scale_mode)
+    ar1_struc <- match.arg(ar1_struc)
     m <- make_diag_margin(struc, n_diag)
+    a <- make_ar1_margin(ar1_struc, n_time, phi = phi)
     global_sd <- 1.2
     dd <- expand.grid(member = factor(paste0("m", seq_len(n_diag))),
                       time = factor(seq_len(n_time)),
@@ -350,7 +428,7 @@ make_sep_diag_ar1_case <- function(struc = c("diag", "homdiag"),
     dd$y <- 0
 
     diag_call <- margin_call(struc, "member")
-    ar1_call <- quote(ar1(0 + time))
+    ar1_call <- margin_call(ar1_struc, "time")
     scale_call <- switch(scale_mode,
         margin = NULL,
         global = quote(global()),
@@ -366,26 +444,36 @@ make_sep_diag_ar1_case <- function(struc = c("diag", "homdiag"),
     form <- as.formula(as.call(list(quote(`~`), quote(y),
         as.call(list(quote(`+`), 1, sep_call)))))
 
-    R_time <- outer(seq_len(n_time), seq_len(n_time),
-                    function(i, j) phi^abs(i - j))
     sd_diag <- if (length(m$sd) == 1L) rep(m$sd, n_diag) else m$sd
-    theta_diag <- if (scale_mode == "global") numeric() else m$scale_theta
+    sd_time <- a$sd
+    diag_active <- scale_mode != "global"
+    time_active <- ar1_struc == "hetar1" && scale_mode == "product"
+    theta_diag <- if (diag_active) m$scale_theta else numeric()
+    theta_time <- c(if (time_active) a$scale_theta, a$corr_theta)
     theta <- if (reversed) {
         c(if (scale_mode == "global") log(global_sd),
-          ar1_to_theta(phi), theta_diag)
+          theta_time, theta_diag)
     } else {
         c(if (scale_mode == "global") log(global_sd),
-          theta_diag, ar1_to_theta(phi))
+          theta_diag, theta_time)
     }
     sd_full <- if (scale_mode == "global") {
         rep(global_sd, n_diag * n_time)
     } else if (reversed) {
-        rep(sd_diag, each = n_time)
+        as.vector(outer(if (time_active) sd_time else rep(1, n_time),
+                        sd_diag))
     } else {
-        rep(sd_diag, n_time)
+        as.vector(outer(sd_diag,
+                        if (time_active) sd_time else rep(1, n_time)))
     }
-    R_full <- if (reversed) kronecker(m$R, R_time)
-              else kronecker(R_time, m$R)
+    R_full <- if (reversed) kronecker(m$R, a$R)
+              else kronecker(a$R, m$R)
+    scale_spec <- switch(scale_mode,
+        global = integer(),
+        margin = if (reversed) 1L else 0L,
+        product = if (ar1_struc == "hetar1") c(0L, 1L)
+                  else if (reversed) 1L else 0L,
+        selected = if (reversed) 1L else 0L)
 
     list(form = form,
          dense_form = if (reversed) y ~ 1 + us(sepgrid(time, member) + 0 | group)
@@ -395,16 +483,15 @@ make_sep_diag_ar1_case <- function(struc = c("diag", "homdiag"),
          theta_dense = c(log(sd_full), put_cor(R_full)),
          R_full = R_full,
          sd_full = sd_full,
-         codes = if (reversed) unname(c(.valid_covstruct[["ar1"]],
+         codes = if (reversed) unname(c(.valid_covstruct[[ar1_struc]],
                                         .valid_covstruct[[struc]]))
                  else unname(c(.valid_covstruct[[struc]],
-                               .valid_covstruct[["ar1"]])),
+                               .valid_covstruct[[ar1_struc]])),
          kinds = if (reversed) c(2L, 3L) else c(3L, 2L),
          dispatch = 5L,
          scale_mode = switch(scale_mode,
              margin = 1L, global = 2L, product = 3L, selected = 4L),
-         scale_spec = if (scale_mode == "global") integer()
-                      else if (reversed) 1L else 0L)
+         scale_spec = scale_spec)
 }
 
 make_sep_diag_dense_case <- function(diag_struc = c("diag", "homdiag"),
@@ -909,7 +996,8 @@ test_that("separable reports kronecker covariance for supported dense x ar1 pair
         make_sep_case("us", reversed = TRUE),
         make_sep_case("cs", scale_mode = "global"),
         make_sep_case("homcs", scale_mode = "product"),
-        make_sep_case("us", reversed = TRUE, scale_mode = "selected_product")
+        make_sep_case("us", reversed = TRUE, scale_mode = "selected_product"),
+        make_sep_case("cs", scale_mode = "product", ar1_struc = "hetar1")
     )
     invisible(lapply(cases, expect_separable_case_vc))
 })
@@ -924,7 +1012,9 @@ test_that("separable likelihood matches dense MVN for supported dense x ar1 pair
         make_sep_case("us", reversed = TRUE),
         make_sep_case("cs", scale_mode = "global"),
         make_sep_case("homcs", reversed = TRUE, scale_mode = "product"),
-        make_sep_case("us", scale_mode = "selected_product")
+        make_sep_case("us", scale_mode = "selected_product"),
+        make_sep_case("us", reversed = TRUE, scale_mode = "product",
+                      ar1_struc = "hetar1")
     )
     invisible(lapply(cases, expect_separable_case_nll))
 })
@@ -952,11 +1042,25 @@ test_that("separable likelihood matches dense MVN for supported dense x dense pa
 })
 
 test_that("separable reports kronecker covariance for ar1 x ar1", {
-    expect_separable_case_vc(make_sep_ar1_ar1_case())
+    cases <- list(
+        make_sep_ar1_ar1_case(),
+        make_sep_ar1_ar1_case("hetar1", "ar1", scale_mode = "margin"),
+        make_sep_ar1_ar1_case("ar1", "hetar1",
+                              scale_mode = "selected_second"),
+        make_sep_ar1_ar1_case("hetar1", "hetar1", scale_mode = "product")
+    )
+    invisible(lapply(cases, expect_separable_case_vc))
 })
 
 test_that("separable likelihood matches dense MVN for ar1 x ar1", {
-    expect_separable_case_nll(make_sep_ar1_ar1_case())
+    cases <- list(
+        make_sep_ar1_ar1_case(),
+        make_sep_ar1_ar1_case("hetar1", "ar1", scale_mode = "margin"),
+        make_sep_ar1_ar1_case("ar1", "hetar1",
+                              scale_mode = "selected_second"),
+        make_sep_ar1_ar1_case("hetar1", "hetar1", scale_mode = "product")
+    )
+    invisible(lapply(cases, expect_separable_case_nll))
 })
 
 test_that("separable reports kronecker covariance for diagonal margin pairs", {
@@ -964,6 +1068,8 @@ test_that("separable reports kronecker covariance for diagonal margin pairs", {
         make_sep_diag_ar1_case("diag"),
         make_sep_diag_ar1_case("homdiag", reversed = TRUE,
                                scale_mode = "product"),
+        make_sep_diag_ar1_case("diag", scale_mode = "product",
+                               ar1_struc = "hetar1"),
         make_sep_diag_dense_case("diag", "us", scale_mode = "product"),
         make_sep_diag_dense_case("homdiag", "cs", reversed = TRUE,
                                  scale_mode = "selected_diag"),
@@ -978,6 +1084,9 @@ test_that("separable likelihood matches dense MVN for diagonal margin pairs", {
         make_sep_diag_ar1_case("diag"),
         make_sep_diag_ar1_case("homdiag", reversed = TRUE,
                                scale_mode = "selected"),
+        make_sep_diag_ar1_case("homdiag", reversed = TRUE,
+                               scale_mode = "product",
+                               ar1_struc = "hetar1"),
         make_sep_diag_dense_case("diag", "us", scale_mode = "product"),
         make_sep_diag_dense_case("homdiag", "homcs",
                                  scale_mode = "selected_dense"),

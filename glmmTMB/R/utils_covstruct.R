@@ -461,7 +461,8 @@ parseNumLevels <- function(levels) {
     .sep_scale_info(margins, regs, scale)
     stop("separable() frontend parsed ", .sep_margin_label(margins),
          ", but the backend currently only evaluates two-margin products ",
-         "among diag(), homdiag(), ar1(), cs(), homcs(), and us().")
+         "among diag(), homdiag(), ar1(), hetar1(), cs(), homcs(), ",
+         "and us().")
 }
 
 .sep_restruc_info <- function(spec, cnms, blksize) {

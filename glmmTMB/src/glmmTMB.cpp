@@ -627,6 +627,25 @@ Type parse_ar1_phi(const vector<Type>& theta, int& theta_pos) {
 }
 
 template <class Type>
+void parse_separable_ar1_margin(int code, int n, const vector<Type>& theta,
+				int& theta_pos, bool scale_here,
+				vector<Type>& margin_sd, Type& phi) {
+  if (code != ar1_covstruct && code != hetar1_covstruct)
+    error("unsupported AR1 margin for separable covariance structure");
+
+  margin_sd.resize(n);
+  margin_sd.fill(Type(1));
+  if (scale_here) {
+    if (code != hetar1_covstruct)
+      error("homogeneous AR1 separable margins cannot carry scale parameters");
+    vector<Type> logsd = theta.segment(theta_pos, n);
+    theta_pos += n;
+    margin_sd = exp(logsd);
+  }
+  phi = parse_ar1_phi(theta, theta_pos);
+}
+
+template <class Type>
 void report_separable_2d(const vector<Type>& cell_sd,
 			 const matrix<Type>& corr0,
 			 const matrix<Type>& corr1,
@@ -731,9 +750,11 @@ sep_dense_ar1_pars<Type> parse_separable_dense_ar1(const vector<Type>& theta,
     bool scale_here = separable_margin_has_scale(term, m);
 
     if (term.sepDensityKinds(m) == ar1_sep) {
-      if (scale_here)
-	error("AR1 separable margins cannot carry scale parameters");
-      out.phi = parse_ar1_phi(theta, theta_pos);
+      vector<Type> margin_sd(n);
+      parse_separable_ar1_margin(code, n, theta, theta_pos, scale_here,
+				 margin_sd, out.phi);
+      if (m == 0) sd0 = margin_sd;
+      if (m == 1) sd1 = margin_sd;
     } else if (term.sepDensityKinds(m) == dense_corr_sep) {
       vector<Type> margin_sd(n);
       parse_separable_dense_margin(code, n, theta, theta_pos, scale_here,
@@ -767,17 +788,21 @@ sep_ar1_ar1_pars<Type> parse_separable_ar1_ar1(const vector<Type>& theta,
     if (term.sepDensityKinds(m) != ar1_sep)
       error("separable covariance currently requires two AR1 margins");
   }
-  if (term.sepScaleMode(0) != global_sep_scale)
-    error("AR1 x AR1 separable covariance requires scale = global()");
 
   int theta_pos = 0;
-  Type global_sd = exp(theta(theta_pos++));
-  out.phi0 = parse_ar1_phi(theta, theta_pos);
-  out.phi1 = parse_ar1_phi(theta, theta_pos);
+  Type global_sd = Type(1);
   vector<Type> sd0(term.sepDims(0));
   vector<Type> sd1(term.sepDims(1));
   sd0.fill(Type(1));
   sd1.fill(Type(1));
+  if (term.sepScaleMode(0) == global_sep_scale)
+    global_sd = exp(theta(theta_pos++));
+  parse_separable_ar1_margin(term.sepCodes(0), term.sepDims(0), theta,
+			     theta_pos, separable_margin_has_scale(term, 0),
+			     sd0, out.phi0);
+  parse_separable_ar1_margin(term.sepCodes(1), term.sepDims(1), theta,
+			     theta_pos, separable_margin_has_scale(term, 1),
+			     sd1, out.phi1);
   out.cell_sd = separable_cell_sd(global_sd, sd0, sd1);
   if (theta_pos != theta.size())
     error("separable covariance theta parsing mismatch");
@@ -822,10 +847,12 @@ sep_diag_ar1_pars<Type> parse_separable_diag_ar1(const vector<Type>& theta,
       if (m == 0) sd0 = margin_sd;
       if (m == 1) sd1 = margin_sd;
     } else if (term.sepDensityKinds(m) == ar1_sep) {
-      if (scale_here)
-	error("AR1 separable margins cannot carry scale parameters");
       ar1_margin = m;
-      out.phi = parse_ar1_phi(theta, theta_pos);
+      vector<Type> margin_sd(n);
+      parse_separable_ar1_margin(code, n, theta, theta_pos, scale_here,
+				 margin_sd, out.phi);
+      if (m == 0) sd0 = margin_sd;
+      if (m == 1) sd1 = margin_sd;
     } else {
       error("separable covariance currently requires one diagonal margin and one AR1 margin");
     }
