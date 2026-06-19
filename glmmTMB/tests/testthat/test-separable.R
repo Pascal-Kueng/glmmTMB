@@ -53,7 +53,7 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
         us = seq(0.8, 1.2, length.out = n_member)
     )
     time_sd <- if (ar1_struc == "hetar1") seq(1.1, 1.4, length.out = n_time)
-               else rep(1, n_time)
+               else rep(1.25, n_time)
     global_sd <- 1.4
 
     R_member <- if (struc %in% c("cs", "homcs")) {
@@ -81,8 +81,9 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
     } else {
         c(member_scale_theta, member_corr_theta)
     }
-    time_scale_theta <- if (ar1_struc == "hetar1" &&
-                            scale_mode == "product") log(time_sd) else numeric()
+    time_scale_theta <- if (scale_mode == "product") {
+        if (ar1_struc == "hetar1") log(time_sd) else log(time_sd[[1]])
+    } else numeric()
     time_theta <- c(time_scale_theta, ar1_to_theta(phi))
     scale_call <- switch(scale_mode,
         margin = NULL,
@@ -127,7 +128,7 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
         scale_spec <- switch(scale_mode,
             global = integer(),
             margin = 1L,
-            product = if (ar1_struc == "hetar1") c(0L, 1L) else 1L,
+            product = c(0L, 1L),
             selected_product = 1L)
     } else {
         form <- as.formula(as.call(list(quote(`~`), quote(y),
@@ -152,7 +153,7 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
         scale_spec <- switch(scale_mode,
             global = integer(),
             margin = 0L,
-            product = if (ar1_struc == "hetar1") c(0L, 1L) else 0L,
+            product = c(0L, 1L),
             selected_product = 0L)
     }
 
@@ -240,9 +241,9 @@ make_ar1_margin <- function(struc = c("ar1", "hetar1"), n = 3,
     R <- outer(seq_len(n), seq_len(n), function(i, j) phi^abs(i - j))
     list(
         struc = struc,
-        sd = if (struc == "hetar1") sd else rep(1, n),
+        sd = if (struc == "hetar1") sd else rep(sd[[1]], n),
         R = R,
-        scale_theta = if (struc == "hetar1") log(sd) else numeric(),
+        scale_theta = if (struc == "hetar1") log(sd) else log(sd[[1]]),
         corr_theta = ar1_to_theta(phi)
     )
 }
@@ -608,7 +609,7 @@ make_sep_ar1_ar1_case <- function(struc0 = c("ar1", "hetar1"),
     scale_index <- switch(scale_mode,
         global = integer(),
         margin = which(c(struc0, struc1) == "hetar1"),
-        product = which(c(struc0, struc1) == "hetar1"),
+        product = seq_along(c(struc0, struc1)),
         selected_first = 1L,
         selected_second = 2L)
     theta0 <- c(if (1L %in% scale_index) m0$scale_theta, m0$corr_theta)
@@ -676,7 +677,7 @@ make_sep_diag_ar1_case <- function(struc = c("diag", "homdiag"),
     sd_diag <- if (length(m$sd) == 1L) rep(m$sd, n_diag) else m$sd
     sd_time <- a$sd
     diag_active <- scale_mode != "global"
-    time_active <- ar1_struc == "hetar1" && scale_mode == "product"
+    time_active <- scale_mode == "product"
     theta_diag <- if (diag_active) m$scale_theta else numeric()
     theta_time <- c(if (time_active) a$scale_theta, a$corr_theta)
     theta <- if (reversed) {
@@ -700,8 +701,7 @@ make_sep_diag_ar1_case <- function(struc = c("diag", "homdiag"),
     scale_spec <- switch(scale_mode,
         global = integer(),
         margin = if (reversed) 1L else 0L,
-        product = if (ar1_struc == "hetar1") c(0L, 1L)
-                  else if (reversed) 1L else 0L,
+        product = c(0L, 1L),
         selected = if (reversed) 1L else 0L)
 
     list(form = form,
@@ -1025,13 +1025,11 @@ test_that("separable selected product scale validates its margins", {
                 data = dd, doFit = FALSE),
         "scale margins must be unique"
     )
-    expect_error(
-        glmmTMB(y ~ 1 +
-                    separable(us(0 + member) %x% ar1(0 + time) | group,
-                              scale = product(ar1(0 + time))),
-                data = dd, doFit = FALSE),
-        "correlation-only"
-    )
+    fit <- glmmTMB(y ~ 1 +
+                       separable(us(0 + member) %x% ar1(0 + time) | group,
+                                 scale = product(ar1(0 + time))),
+                   data = dd, doFit = FALSE)
+    expect_equal(fit$condReStruc[[1]]$sepScaleSpec, 1L)
     expect_error(
         glmmTMB(y ~ 1 +
                     separable(us(0 + member) %x% ar1(0 + time) | group,
@@ -1174,7 +1172,7 @@ test_that("separable preserves user-facing zi and dispersion formulas", {
     expect_false(grepl("data.frame", dtxt, fixed = TRUE))
 })
 
-test_that("separable rejects unsupported margins", {
+test_that("separable validates unsupported margins and scale choices", {
     dd <- make_sep_dat()
 
     expect_error(
@@ -1183,26 +1181,22 @@ test_that("separable rejects unsupported margins", {
                 data = dd, doFit = FALSE),
         "specify the scale mode"
     )
-    expect_error(
-        glmmTMB(y ~ 1 +
-                    separable(us(0 + member) %x% ar1(0 + time) | group,
-                              scale = ar1(0 + time)),
-                data = dd, doFit = FALSE),
-        "correlation-only"
-    )
+    fit <- glmmTMB(y ~ 1 +
+                       separable(us(0 + member) %x% ar1(0 + time) | group,
+                                 scale = ar1(0 + time)),
+                   data = dd, doFit = FALSE)
+    expect_equal(fit$condReStruc[[1]]$sepScaleSpec, 1L)
     expect_error(
         glmmTMB(y ~ 1 +
                     separable(ar1(0 + member) %x% ar1(0 + time) | group),
                 data = dd, doFit = FALSE),
-        "scale = global"
+        "no unambiguous scale margin"
     )
-    expect_error(
-        glmmTMB(y ~ 1 +
-                    separable(ar1(0 + member) %x% ar1(0 + time) | group,
-                              scale = product()),
-                data = dd, doFit = FALSE),
-        "needs at least one scale-capable margin"
-    )
+    fit <- glmmTMB(y ~ 1 +
+                       separable(ar1(0 + member) %x% ar1(0 + time) | group,
+                                 scale = product()),
+                   data = dd, doFit = FALSE)
+    expect_equal(fit$condReStruc[[1]]$sepScaleSpec, c(0L, 1L))
     expect_error(
         glmmTMB(y ~ 1 +
                     separable(foo(0 + member) %x% ar1(0 + time) | group),
@@ -1273,6 +1267,7 @@ test_that("separable likelihood matches dense MVN for supported dense x dense pa
 test_that("separable reports kronecker covariance for ar1 x ar1", {
     cases <- list(
         make_sep_ar1_ar1_case(),
+        make_sep_ar1_ar1_case("ar1", "ar1", scale_mode = "product"),
         make_sep_ar1_ar1_case("hetar1", "ar1", scale_mode = "margin"),
         make_sep_ar1_ar1_case("ar1", "hetar1",
                               scale_mode = "selected_second"),
@@ -1284,6 +1279,7 @@ test_that("separable reports kronecker covariance for ar1 x ar1", {
 test_that("separable likelihood matches dense MVN for ar1 x ar1", {
     cases <- list(
         make_sep_ar1_ar1_case(),
+        make_sep_ar1_ar1_case("ar1", "ar1", scale_mode = "product"),
         make_sep_ar1_ar1_case("hetar1", "ar1", scale_mode = "margin"),
         make_sep_ar1_ar1_case("ar1", "hetar1",
                               scale_mode = "selected_second"),

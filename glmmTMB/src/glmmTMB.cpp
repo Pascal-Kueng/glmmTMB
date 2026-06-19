@@ -770,15 +770,8 @@ void parse_separable_ar1_margin(int code, int n, const vector<Type>& theta,
   if (code != ar1_covstruct && code != hetar1_covstruct)
     error("unsupported AR1 margin for separable covariance structure");
 
-  margin_sd.resize(n);
-  margin_sd.fill(Type(1));
-  if (scale_here) {
-    if (code != hetar1_covstruct)
-      error("homogeneous AR1 separable margins cannot carry scale parameters");
-    vector<Type> logsd = theta.segment(theta_pos, n);
-    theta_pos += n;
-    margin_sd = exp(logsd);
-  }
+  parse_separable_margin_sd(code, ar1_covstruct, n, theta, theta_pos,
+			    scale_here, margin_sd);
   phi = parse_ar1_phi(theta, theta_pos);
 }
 

@@ -254,13 +254,17 @@ parseNumLevels <- function(levels) {
     x
 }
 
-.sep_margin_entry <- function(code, density_kind, n_scale, n_corr) {
+.sep_margin_entry <- function(code, density_kind, n_scale, n_corr,
+                              can_auto_scale = NULL) {
     n_scale_fun <- if (is.function(n_scale)) n_scale else function(n) n_scale
     n_corr_fun <- if (is.function(n_corr)) n_corr else function(n) n_corr
+    can_scale <- is.function(n_scale) || as.integer(n_scale) > 0L
+    if (is.null(can_auto_scale)) can_auto_scale <- can_scale
     list(
         code = code,
         density_kind = density_kind,
-        can_scale = is.function(n_scale) || as.integer(n_scale) > 0L,
+        can_scale = can_scale,
+        can_auto_scale = can_auto_scale,
         n_scale = function(n) as.integer(n_scale_fun(n)),
         n_corr = function(n) as.integer(n_corr_fun(n))
     )
@@ -273,7 +277,8 @@ parseNumLevels <- function(levels) {
     homcs = .sep_margin_entry("homcs", "dense_corr", 1L, 1L),
     us = .sep_margin_entry("us", "dense_corr", function(n) n,
                            function(n) n * (n - 1L) / 2L),
-    ar1 = .sep_margin_entry("ar1", "ar1", 0L, 1L),
+    ar1 = .sep_margin_entry("ar1", "ar1", 1L, 1L,
+                            can_auto_scale = FALSE),
     hetar1 = .sep_margin_entry("hetar1", "ar1", function(n) n, 1L),
     ou = .sep_margin_entry("ou", "spatial", 1L, 1L),
     exp = .sep_margin_entry("exp", "spatial", 1L, 1L),
@@ -341,14 +346,15 @@ parseNumLevels <- function(levels) {
 .sep_scale_info <- function(margins, regs, scale = NULL) {
     ## Resolve how absolute SD parameters enter the separable covariance.
     can_scale <- vapply(regs, `[[`, logical(1), "can_scale")
-    scale_candidates <- which(can_scale)
+    can_auto_scale <- vapply(regs, `[[`, logical(1), "can_auto_scale")
+    scale_candidates <- which(can_auto_scale)
     scale_mode <- if (is.null(scale)) "auto" else scale$mode
 
     if (identical(scale_mode, "auto")) {
         if (length(scale_candidates) == 0L) {
             stop("separable() margins ", .sep_margin_label(margins),
-                 " define only a correlation product. Use scale = global() ",
-                 "to add an overall scale.")
+                 " have no unambiguous scale margin. Use scale = global() ",
+                 "or choose a scale margin explicitly.")
         }
         if (length(scale_candidates) > 1L) {
             stop("More than one separable() margin can carry scale in ",
@@ -380,7 +386,7 @@ parseNumLevels <- function(levels) {
     } else if (identical(scale_mode, "global")) {
         scale_margin <- integer()
     } else if (identical(scale_mode, "product")) {
-        scale_margin <- scale_candidates
+        scale_margin <- which(can_scale)
         if (length(scale_margin) == 0L) {
             stop("separable() scale = product() needs at least one ",
                  "scale-capable margin.")
