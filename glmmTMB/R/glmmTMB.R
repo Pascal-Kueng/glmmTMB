@@ -1155,6 +1155,10 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
             tmp$sepDispatch <- sepInfo[[i]]$dispatch
             tmp$sepScaleMode <- sepInfo[[i]]$scale_mode
             tmp$sepScaleSpec <- sepInfo[[i]]$scale_spec
+            tmp$sepThetaBlockMargins <- sepInfo[[i]]$theta_block_margins
+            tmp$sepThetaBlockKinds <- sepInfo[[i]]$theta_block_kinds
+            tmp$sepThetaBlockStarts <- sepInfo[[i]]$theta_block_starts
+            tmp$sepThetaBlockLengths <- sepInfo[[i]]$theta_block_lengths
             tmp$sepDistStarts <- sepInfo[[i]]$dist_starts
             tmp$sepDists <- sepInfo[[i]]$dists
         }

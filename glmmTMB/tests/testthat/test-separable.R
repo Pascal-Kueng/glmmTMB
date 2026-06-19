@@ -1024,6 +1024,20 @@ test_that("separable parser records global and product scale modes", {
                  "product")
 })
 
+test_that("separable records registry-derived theta blocks", {
+    dd <- make_sep_dat()
+    fit <- glmmTMB(y ~ 1 +
+                       separable(ar1(0 + member) %x% ar1(0 + time) | group,
+                                 scale = global()),
+                   data = dd, doFit = FALSE)
+    restruc <- fit$condReStruc[[1]]
+
+    expect_equal(restruc$sepThetaBlockMargins, c(-1L, 0L, 1L))
+    expect_equal(restruc$sepThetaBlockKinds, c(1L, 3L, 3L))
+    expect_equal(restruc$sepThetaBlockStarts, 0:2)
+    expect_equal(restruc$sepThetaBlockLengths, c(1L, 1L, 1L))
+})
+
 test_that("separable selected product scale validates its margins", {
     dd <- make_sep_dat()
 

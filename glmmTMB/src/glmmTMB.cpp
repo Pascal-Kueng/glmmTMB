@@ -130,6 +130,16 @@ enum separable_scale_kind {
   heterogeneous_sep_scale_kind = 2
 };
 
+enum separable_theta_block_kind {
+  // These values must match `.sep_theta_block_kind_code` in R/utils_covstruct.R.
+  global_scale_theta_block = 1,
+  scale_theta_block = 2,
+  corr_theta_block = 3,
+  range_theta_block = 4,
+  smoothness_theta_block = 5,
+  decay_theta_block = 6
+};
+
 // should probably be named just 'predictCode';
 // originally for enabling z-i prediction
 // 'corrected' = mean prediction incorporates z-i effects
@@ -361,16 +371,22 @@ struct per_term_info {
   //   1 = dense correlation margin (currently cs, homcs, or us)
   //   2 = AR(1) correlation margin (currently ar1 or hetar1)
   //   3 = diagonal correlation margin (currently diag or homdiag)
+  //   4 = spatial correlation margin (currently ou, exp, gau, or mat)
+  //   5 = Toeplitz correlation margin (currently toep or homtoep)
   //
   // `sepDispatch` selects the C++ evaluator.  The current backend uses one
-  // evaluator for any two margins that can be represented by correlation
-  // matrices.
+  // evaluator for any margin product that can be represented by correlation
+  // matrices plus a separate cell standard-deviation vector.
   //
   // `sepScaleMode` and `sepScaleSpec` describe how cell standard deviations are
   // built: one selected margin, one global scale, all scale-capable margins, or
   // an explicit product of selected margins.
   // `sepScaleKinds` describes how each margin consumes SD parameters:
   // no SDs, one homogeneous SD, or one SD per margin level.
+  // `sepThetaBlock*` describes the registry-derived theta layout.  The current
+  // builders still parse theta sequentially, but the explicit block layout is
+  // checked against theta and provides the extension point for builders with
+  // richer parameter contracts.
   vector<int> sepDims;
   vector<int> sepCodes;
   vector<int> sepBuilderKinds;
@@ -378,6 +394,10 @@ struct per_term_info {
   vector<int> sepDispatch;
   vector<int> sepScaleMode;
   vector<int> sepScaleSpec;
+  vector<int> sepThetaBlockMargins;
+  vector<int> sepThetaBlockKinds;
+  vector<int> sepThetaBlockStarts;
+  vector<int> sepThetaBlockLengths;
   vector<int> sepDistStarts;
   vector<Type> sepDists;
   // Report output
@@ -455,6 +475,26 @@ struct terms_t : vector<per_term_info<Type> > {
       if(!Rf_isNull(sscalespec)){
 	RObjectTestExpectedType(sscalespec, &Rf_isNumeric, "sepScaleSpec");
 	(*this)(i).sepScaleSpec = asVector<int>(sscalespec);
+      }
+      SEXP sthetamargins = getListElement(y, "sepThetaBlockMargins");
+      if(!Rf_isNull(sthetamargins)){
+	RObjectTestExpectedType(sthetamargins, &Rf_isNumeric, "sepThetaBlockMargins");
+	(*this)(i).sepThetaBlockMargins = asVector<int>(sthetamargins);
+      }
+      SEXP sthetakinds = getListElement(y, "sepThetaBlockKinds");
+      if(!Rf_isNull(sthetakinds)){
+	RObjectTestExpectedType(sthetakinds, &Rf_isNumeric, "sepThetaBlockKinds");
+	(*this)(i).sepThetaBlockKinds = asVector<int>(sthetakinds);
+      }
+      SEXP sthetastarts = getListElement(y, "sepThetaBlockStarts");
+      if(!Rf_isNull(sthetastarts)){
+	RObjectTestExpectedType(sthetastarts, &Rf_isNumeric, "sepThetaBlockStarts");
+	(*this)(i).sepThetaBlockStarts = asVector<int>(sthetastarts);
+      }
+      SEXP sthetalengths = getListElement(y, "sepThetaBlockLengths");
+      if(!Rf_isNull(sthetalengths)){
+	RObjectTestExpectedType(sthetalengths, &Rf_isNumeric, "sepThetaBlockLengths");
+	(*this)(i).sepThetaBlockLengths = asVector<int>(sthetalengths);
       }
       SEXP sdiststarts = getListElement(y, "sepDistStarts");
       if(!Rf_isNull(sdiststarts)){
@@ -773,6 +813,34 @@ void check_separable_metadata(per_term_info<Type>& term) {
 }
 
 template <class Type>
+void check_separable_theta_layout(per_term_info<Type>& term, int theta_size) {
+  if (term.sepThetaBlockStarts.size() == 0) return;
+  int n = term.sepThetaBlockStarts.size();
+  if (term.sepThetaBlockLengths.size() != n ||
+      term.sepThetaBlockMargins.size() != n ||
+      term.sepThetaBlockKinds.size() != n)
+    error("separable theta block metadata is inconsistent");
+
+  int pos = 0;
+  for (int i = 0; i < n; i++) {
+    int margin = term.sepThetaBlockMargins(i);
+    int kind = term.sepThetaBlockKinds(i);
+    int start = term.sepThetaBlockStarts(i);
+    int length = term.sepThetaBlockLengths(i);
+
+    if (margin < -1 || margin >= term.sepDims.size())
+      error("separable theta block margin is out of range");
+    if (kind < global_scale_theta_block || kind > decay_theta_block)
+      error("unknown separable theta block kind");
+    if (start != pos || length < 0 || start + length > theta_size)
+      error("separable theta block layout does not match theta");
+    pos += length;
+  }
+  if (pos != theta_size)
+    error("separable theta block layout does not cover theta");
+}
+
+template <class Type>
 vector<Type> separable_cell_sd(Type global_sd,
 			       const vector<vector<Type> >& margin_sd,
 			       const vector<int>& dims) {
@@ -943,6 +1011,7 @@ template <class Type>
 sep_corr_product_pars<Type> parse_separable_corr_product(const vector<Type>& theta,
 							 per_term_info<Type>& term) {
   sep_corr_product_pars<Type> out;
+  check_separable_theta_layout(term, theta.size());
   int n_margin = term.sepDims.size();
   for (int m = 0; m < n_margin; m++) {
     int kind = term.sepBuilderKinds(m);

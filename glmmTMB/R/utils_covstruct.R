@@ -242,9 +242,25 @@ parseNumLevels <- function(levels) {
     x
 }
 
-.sep_theta <- function(corr) {
-    corr_fun <- if (is.function(corr)) corr else function(n) corr
-    list(n_corr = function(n) as.integer(corr_fun(n)))
+.sep_theta <- function(...) {
+    blocks <- list(...)
+    nms <- names(blocks)
+    if (length(blocks) == 1L && (is.null(nms) || !nzchar(nms))) {
+        nms <- "corr"
+    }
+    if (length(blocks) > 0L &&
+        (is.null(nms) || any(!nzchar(nms)) || anyDuplicated(nms))) {
+        stop("Malformed separable() theta contract.")
+    }
+    blocks <- Map(function(name, n) {
+        n_fun <- if (is.function(n)) n else function(d) n
+        list(name = name, n = function(d) as.integer(n_fun(d)))
+    }, nms, blocks)
+    n_theta <- function(d) {
+        sum(vapply(blocks, function(x) x$n(d), integer(1)))
+    }
+    list(blocks = blocks,
+         n_theta = n_theta)
 }
 
 .sep_scale <- function(kind = c("none", "homogeneous", "heterogeneous"),
@@ -275,7 +291,7 @@ parseNumLevels <- function(levels) {
         is.null(scale$can_scale) || is.null(scale$can_auto_scale)) {
         stop("Malformed separable() scale contract for ", code)
     }
-    if (!is.function(theta$n_corr)) {
+    if (!is.function(theta$n_theta) || is.null(theta$blocks)) {
         stop("Malformed separable() theta contract for ", code)
     }
     if (is.null(metadata$needs_dist) || is.null(metadata$dist_coord_dim)) {
@@ -297,54 +313,54 @@ parseNumLevels <- function(levels) {
         can_scale = scale$can_scale,
         can_auto_scale = scale$can_auto_scale,
         n_scale = scale$n,
-        n_corr = theta$n_corr
+        n_theta = theta$n_theta
     )
 }
 
 .sep_margin_registry <- list(
     diag = .sep_margin_entry("diag", "diag",
                              .sep_scale("heterogeneous", function(n) n),
-                             .sep_theta(0L)),
+                             .sep_theta()),
     homdiag = .sep_margin_entry("homdiag", "diag",
                                 .sep_scale("homogeneous", 1L),
-                                .sep_theta(0L)),
+                                .sep_theta()),
     cs = .sep_margin_entry("cs", "dense_corr",
                            .sep_scale("heterogeneous", function(n) n),
-                           .sep_theta(1L)),
+                           .sep_theta(corr = 1L)),
     homcs = .sep_margin_entry("homcs", "dense_corr",
                               .sep_scale("homogeneous", 1L),
-                              .sep_theta(1L)),
+                              .sep_theta(corr = 1L)),
     us = .sep_margin_entry("us", "dense_corr",
                            .sep_scale("heterogeneous", function(n) n),
-                           .sep_theta(function(n) n * (n - 1L) / 2L)),
+                           .sep_theta(corr = function(n) n * (n - 1L) / 2L)),
     ar1 = .sep_margin_entry("ar1", "ar1",
                             .sep_scale("homogeneous", 1L, auto = FALSE),
-                            .sep_theta(1L)),
+                            .sep_theta(corr = 1L)),
     hetar1 = .sep_margin_entry("hetar1", "ar1",
                                .sep_scale("heterogeneous", function(n) n),
-                               .sep_theta(1L)),
+                               .sep_theta(corr = 1L)),
     ou = .sep_margin_entry("ou", "spatial",
                            .sep_scale("homogeneous", 1L),
-                           .sep_theta(1L),
+                           .sep_theta(decay = 1L),
                            .sep_metadata(dist_coord_dim = 1L)),
     exp = .sep_margin_entry("exp", "spatial",
                             .sep_scale("homogeneous", 1L),
-                            .sep_theta(1L),
+                            .sep_theta(range = 1L),
                             .sep_metadata(dist_coord_dim = NA)),
     gau = .sep_margin_entry("gau", "spatial",
                             .sep_scale("homogeneous", 1L),
-                            .sep_theta(1L),
+                            .sep_theta(range = 1L),
                             .sep_metadata(dist_coord_dim = NA)),
     mat = .sep_margin_entry("mat", "spatial",
                             .sep_scale("homogeneous", 1L),
-                            .sep_theta(2L),
+                            .sep_theta(range = 1L, smoothness = 1L),
                             .sep_metadata(dist_coord_dim = NA)),
     toep = .sep_margin_entry("toep", "toep",
                              .sep_scale("heterogeneous", function(n) n),
-                             .sep_theta(function(n) n - 1L)),
+                             .sep_theta(corr = function(n) n - 1L)),
     homtoep = .sep_margin_entry("homtoep", "toep",
                                 .sep_scale("homogeneous", 1L),
-                                .sep_theta(function(n) n - 1L))
+                                .sep_theta(corr = function(n) n - 1L))
 )
 
 ## Each supported separable builder kind must have a C++ margin builder that
@@ -370,6 +386,15 @@ parseNumLevels <- function(levels) {
     none = 0L,
     homogeneous = 1L,
     heterogeneous = 2L
+)
+
+.sep_theta_block_kind_code <- c(
+    global_scale = 1L,
+    scale = 2L,
+    corr = 3L,
+    range = 4L,
+    smoothness = 5L,
+    decay = 6L
 )
 
 .sep_dispatch <- function(regs) {
@@ -519,6 +544,41 @@ parseNumLevels <- function(levels) {
     list(starts = starts, dists = dists)
 }
 
+.sep_theta_block_layout <- function(regs, dims, scale_info) {
+    rows <- list()
+    pos <- 0L
+
+    add_block <- function(margin, kind, n) {
+        if (!kind %in% names(.sep_theta_block_kind_code)) {
+            stop("Unsupported separable() theta block kind: ", kind)
+        }
+        rows[[length(rows) + 1L]] <<- data.frame(
+            margin = as.integer(margin),
+            kind = as.integer(.sep_theta_block_kind_code[[kind]]),
+            start = as.integer(pos),
+            length = as.integer(n),
+            stringsAsFactors = FALSE
+        )
+        pos <<- pos + as.integer(n)
+    }
+
+    if (identical(scale_info$mode, "global")) {
+        add_block(-1L, "global_scale", 1L)
+    }
+    for (i in seq_along(regs)) {
+        if (i %in% scale_info$margin) {
+            add_block(i - 1L, "scale", regs[[i]]$n_scale(dims[[i]]))
+        }
+        for (block in regs[[i]]$theta$blocks) {
+            add_block(i - 1L, block$name, block$n(dims[[i]]))
+        }
+    }
+
+    if (length(rows)) do.call(rbind, rows) else
+        data.frame(margin = integer(), kind = integer(),
+                   start = integer(), length = integer())
+}
+
 .sep_restruc_info <- function(spec, cnms, blksize) {
     ## R-side contract for currently supported separable terms.
     spec <- .sep_parse_spec(spec)
@@ -550,17 +610,8 @@ parseNumLevels <- function(levels) {
 
     scale_info <- .sep_scale_info(margins, regs, spec$scale)
 
-    scale_ntheta <- if (identical(scale_info$mode, "global")) {
-        1L
-    } else {
-        sum(vapply(scale_info$margin,
-                   function(i) regs[[i]]$n_scale(dims[[i]]),
-                   integer(1)))
-    }
-    corr_ntheta <- sum(vapply(seq_along(regs), function(i) {
-        regs[[i]]$n_corr(dims[[i]])
-    }, integer(1)))
-    ntheta <- scale_ntheta + corr_ntheta
+    theta_layout <- .sep_theta_block_layout(regs, dims, scale_info)
+    ntheta <- sum(theta_layout$length)
     builder_kind <- vapply(regs, `[[`, character(1), "builder_kind")
     scale_kind <- vapply(regs, `[[`, character(1), "scale_kind")
     distance_info <- .sep_distance_info(regs, spec, dims)
@@ -573,6 +624,10 @@ parseNumLevels <- function(levels) {
         dispatch = as.integer(.sep_dispatch_code[dispatch]),
         scale_mode = scale_info$mode_code,
         scale_spec = scale_info$spec,
+        theta_block_margins = theta_layout$margin,
+        theta_block_kinds = theta_layout$kind,
+        theta_block_starts = theta_layout$start,
+        theta_block_lengths = theta_layout$length,
         dist_starts = distance_info$starts,
         dists = distance_info$dists,
         ntheta = as.integer(ntheta),
