@@ -125,6 +125,8 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
         codes <- unname(c(.valid_covstruct[[ar1_struc]],
                           .valid_covstruct[[struc]]))
         kinds <- c(2L, 1L)
+        scale_kinds <- c(if (ar1_struc == "hetar1") 2L else 1L,
+                         if (struc == "homcs") 1L else 2L)
         scale_spec <- switch(scale_mode,
             global = integer(),
             margin = 1L,
@@ -150,6 +152,8 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
         codes <- unname(c(.valid_covstruct[[struc]],
                           .valid_covstruct[[ar1_struc]]))
         kinds <- c(1L, 2L)
+        scale_kinds <- c(if (struc == "homcs") 1L else 2L,
+                         if (ar1_struc == "hetar1") 2L else 1L)
         scale_spec <- switch(scale_mode,
             global = integer(),
             margin = 0L,
@@ -163,6 +167,7 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
          theta_dense = c(log(sd_full), put_cor(R_full)),
          R_full = R_full, sd_full = sd_full,
          codes = codes, kinds = kinds, dispatch = 1L,
+         scale_kinds = scale_kinds,
          scale_mode = scale_mode_code,
          scale_spec = scale_spec,
          n_member = n_member, n_time = n_time)
@@ -174,6 +179,13 @@ case_data <- function(case, reps = FALSE, n_group = 2) {
                  n_group = n_group, reps = reps)
 }
 
+expected_sep_scale_kinds <- function(case) {
+    if (!is.null(case$scale_kinds)) return(case$scale_kinds)
+    struc <- names(.valid_covstruct)[match(case$codes, unname(.valid_covstruct))]
+    ifelse(struc %in% c("homdiag", "homcs", "ar1", "ou", "exp",
+                        "gau", "mat", "homtoep"), 1L, 2L)
+}
+
 expect_separable_case_vc <- function(case) {
     dd <- case_data(case, reps = TRUE)
     fit <- fit_fixed_theta(case$form, dd, case$theta)
@@ -182,6 +194,7 @@ expect_separable_case_vc <- function(case) {
 
     expect_equal(restruc$sepCodes, case$codes)
     expect_equal(restruc$sepDensityKinds, case$kinds)
+    expect_equal(restruc$sepScaleKinds, expected_sep_scale_kinds(case))
     expect_equal(restruc$sepDispatch, case$dispatch)
     expect_equal(restruc$sepScaleMode, case$scale_mode)
     expect_equal(restruc$sepScaleSpec, case$scale_spec)
@@ -930,6 +943,7 @@ test_that("separable specs handle product order", {
     expect_equal(h$condReStruc[[1]]$sepCodes,
                  unname(c(.valid_covstruct[["ar1"]], .valid_covstruct[["homcs"]])))
     expect_equal(h$condReStruc[[1]]$sepDensityKinds, c(2L, 1L))
+    expect_equal(h$condReStruc[[1]]$sepScaleKinds, c(1L, 1L))
     expect_equal(h$condReStruc[[1]]$sepDispatch, 1L)
     expect_equal(h$condReStruc[[1]]$sepScaleMode, 1L)
     expect_equal(h$condReStruc[[1]]$sepScaleSpec, 1L)
@@ -938,6 +952,7 @@ test_that("separable specs handle product order", {
     expect_equal(u$condReStruc[[1]]$sepCodes,
                  unname(c(.valid_covstruct[["us"]], .valid_covstruct[["ar1"]])))
     expect_equal(u$condReStruc[[1]]$sepDensityKinds, c(1L, 2L))
+    expect_equal(u$condReStruc[[1]]$sepScaleKinds, c(2L, 1L))
     expect_equal(u$condReStruc[[1]]$sepDispatch, 1L)
     expect_equal(u$condReStruc[[1]]$sepScaleMode, 1L)
     expect_equal(u$condReStruc[[1]]$sepScaleSpec, 0L)

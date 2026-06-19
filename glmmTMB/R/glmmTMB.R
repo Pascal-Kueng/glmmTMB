@@ -1151,6 +1151,7 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
             tmp$sepDims <- sepInfo[[i]]$dims
             tmp$sepCodes <- sepInfo[[i]]$codes
             tmp$sepDensityKinds <- sepInfo[[i]]$density_kinds
+            tmp$sepScaleKinds <- sepInfo[[i]]$scale_kinds
             tmp$sepDispatch <- sepInfo[[i]]$dispatch
             tmp$sepScaleMode <- sepInfo[[i]]$scale_mode
             tmp$sepScaleSpec <- sepInfo[[i]]$scale_spec

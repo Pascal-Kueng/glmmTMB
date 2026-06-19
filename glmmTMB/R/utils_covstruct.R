@@ -243,14 +243,30 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_margin_entry <- function(code, density_kind, n_scale, n_corr,
-                              can_auto_scale = NULL) {
+                              can_auto_scale = NULL, scale_kind = NULL) {
     n_scale_fun <- if (is.function(n_scale)) n_scale else function(n) n_scale
     n_corr_fun <- if (is.function(n_corr)) n_corr else function(n) n_corr
     can_scale <- is.function(n_scale) || as.integer(n_scale) > 0L
     if (is.null(can_auto_scale)) can_auto_scale <- can_scale
+    if (is.null(scale_kind)) {
+        scale_kind <- if (!can_scale) {
+            "none"
+        } else if (is.function(n_scale)) {
+            "heterogeneous"
+        } else if (identical(as.integer(n_scale), 1L)) {
+            "homogeneous"
+        } else {
+            stop("Unsupported separable() scale parameterization for ", code,
+                 ". Use scale_kind explicitly.")
+        }
+    }
+    if (!scale_kind %in% c("none", "homogeneous", "heterogeneous")) {
+        stop("Unknown separable() scale_kind for ", code, ": ", scale_kind)
+    }
     list(
         code = code,
         density_kind = density_kind,
+        scale_kind = scale_kind,
         can_scale = can_scale,
         can_auto_scale = can_auto_scale,
         n_scale = function(n) as.integer(n_scale_fun(n)),
@@ -295,6 +311,12 @@ parseNumLevels <- function(levels) {
     global = 2L,          # one global scale, all margins correlation-only
     product = 3L,         # all eligible margin scales multiply
     selected_product = 4L    # selected margin scales multiply
+)
+
+.sep_scale_kind_code <- c(
+    none = 0L,
+    homogeneous = 1L,
+    heterogeneous = 2L
 )
 
 .sep_dispatch <- function(regs) {
@@ -485,12 +507,14 @@ parseNumLevels <- function(levels) {
     }, integer(1)))
     ntheta <- scale_ntheta + corr_ntheta
     density_kind <- vapply(regs, `[[`, character(1), "density_kind")
+    scale_kind <- vapply(regs, `[[`, character(1), "scale_kind")
     spatial_info <- .sep_spatial_info(margins, spec, dims)
 
     list(
         dims = dims,
         codes = as.integer(vapply(strucs, function(z) .valid_covstruct[[z]], numeric(1))),
         density_kinds = as.integer(.sep_density_kind_code[density_kind]),
+        scale_kinds = as.integer(.sep_scale_kind_code[scale_kind]),
         dispatch = as.integer(.sep_dispatch_code[dispatch]),
         scale_mode = scale_info$mode_code,
         scale_spec = scale_info$spec,

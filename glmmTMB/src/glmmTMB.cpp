@@ -123,6 +123,13 @@ enum separable_scale_mode {
   selected_product_sep_scale = 4
 };
 
+enum separable_scale_kind {
+  // These values must match `.sep_scale_kind_code` in R/utils_covstruct.R.
+  no_sep_scale_kind = 0,
+  homogeneous_sep_scale_kind = 1,
+  heterogeneous_sep_scale_kind = 2
+};
+
 // should probably be named just 'predictCode';
 // originally for enabling z-i prediction
 // 'corrected' = mean prediction incorporates z-i effects
@@ -362,9 +369,12 @@ struct per_term_info {
   // `sepScaleMode` and `sepScaleSpec` describe how cell standard deviations are
   // built: one selected margin, one global scale, all scale-capable margins, or
   // an explicit product of selected margins.
+  // `sepScaleKinds` describes how each margin consumes SD parameters:
+  // no SDs, one homogeneous SD, or one SD per margin level.
   vector<int> sepDims;
   vector<int> sepCodes;
   vector<int> sepDensityKinds;
+  vector<int> sepScaleKinds;
   vector<int> sepDispatch;
   vector<int> sepScaleMode;
   vector<int> sepScaleSpec;
@@ -425,6 +435,11 @@ struct terms_t : vector<per_term_info<Type> > {
       if(!Rf_isNull(skinds)){
 	RObjectTestExpectedType(skinds, &Rf_isNumeric, "sepDensityKinds");
 	(*this)(i).sepDensityKinds = asVector<int>(skinds);
+      }
+      SEXP sscalekinds = getListElement(y, "sepScaleKinds");
+      if(!Rf_isNull(sscalekinds)){
+	RObjectTestExpectedType(sscalekinds, &Rf_isNumeric, "sepScaleKinds");
+	(*this)(i).sepScaleKinds = asVector<int>(sscalekinds);
       }
       SEXP sdispatch = getListElement(y, "sepDispatch");
       if(!Rf_isNull(sdispatch)){
@@ -555,6 +570,7 @@ bool separable_margin_has_scale(per_term_info<Type>& term, int m) {
 struct sep_margin_spec {
   int code;
   int kind;
+  int scale_kind;
   int n;
   int index;
   bool scale;
@@ -565,18 +581,11 @@ sep_margin_spec separable_margin_spec(per_term_info<Type>& term, int m) {
   sep_margin_spec spec;
   spec.code = term.sepCodes(m);
   spec.kind = term.sepDensityKinds(m);
+  spec.scale_kind = term.sepScaleKinds(m);
   spec.n = term.sepDims(m);
   spec.index = m;
   spec.scale = separable_margin_has_scale(term, m);
   return spec;
-}
-
-bool separable_margin_has_homogeneous_sd(const sep_margin_spec& margin) {
-  return margin.kind == spatial_sep ||
-    margin.code == homdiag_covstruct ||
-    margin.code == homcs_covstruct ||
-    margin.code == ar1_covstruct ||
-    margin.code == homtoep_covstruct;
 }
 
 template <class Type>
@@ -606,12 +615,18 @@ void parse_separable_margin_sd(const sep_margin_spec& margin,
   margin_sd.fill(Type(1));
   if (!margin.scale) return;
 
-  if (separable_margin_has_homogeneous_sd(margin)) {
+  switch (margin.scale_kind) {
+  case homogeneous_sep_scale_kind:
     margin_sd.fill(exp(theta(theta_pos++)));
-  } else {
+    break;
+  case heterogeneous_sep_scale_kind: {
     vector<Type> logsd = theta.segment(theta_pos, margin.n);
     theta_pos += margin.n;
     margin_sd = exp(logsd);
+    break;
+  }
+  default:
+    error("separable margin has no scale parameters");
   }
 }
 
@@ -728,6 +743,7 @@ template <class Type>
 void check_separable_metadata(per_term_info<Type>& term) {
   if (term.sepDims.size() < 2 || term.sepCodes.size() != term.sepDims.size() ||
       term.sepDensityKinds.size() != term.sepDims.size() ||
+      term.sepScaleKinds.size() != term.sepDims.size() ||
       term.sepDispatch.size() != 1 ||
       term.sepScaleMode.size() != 1)
     error("separable covariance structure is missing margin metadata");
@@ -747,6 +763,13 @@ void check_separable_metadata(per_term_info<Type>& term) {
     if (term.sepScaleSpec(i) < 0 ||
 	term.sepScaleSpec(i) >= term.sepDims.size())
       error("separable margin scale index is out of range");
+  for (int i = 0; i < term.sepScaleKinds.size(); i++)
+    if (term.sepScaleKinds(i) < no_sep_scale_kind ||
+	term.sepScaleKinds(i) > heterogeneous_sep_scale_kind)
+      error("unknown separable margin scale kind");
+  for (int i = 0; i < term.sepScaleSpec.size(); i++)
+    if (term.sepScaleKinds(term.sepScaleSpec(i)) == no_sep_scale_kind)
+      error("separable scale margin has no scale parameters");
 }
 
 template <class Type>
@@ -1404,8 +1427,9 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
   else if (term.blockCode == separable_covstruct) {
     // R validates the separable margins and supplies an evaluator code
     // (`sepDispatch`) plus coordinate-order metadata (`sepDensityKinds`,
-    // `sepScaleMode`, `sepScaleSpec`).  Products up to four margins use
-    // nested TMB SEPARABLE calls; longer products use a dense fallback.
+    // `sepScaleKinds`, `sepScaleMode`, `sepScaleSpec`). Products up to four
+    // margins use nested TMB SEPARABLE calls; longer products use a dense
+    // fallback.
     check_separable_metadata(term);
     switch (term.sepDispatch(0)) {
     case corr_matrix_product_dispatch: {
