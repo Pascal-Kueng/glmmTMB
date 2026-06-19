@@ -1459,7 +1459,7 @@ test_that("separable prediction with newdata reports current limitation", {
                  "newdata is not yet implemented")
 })
 
-test_that("separable simulation reports current limitation", {
+test_that("separable simulation works for product covariance structures", {
     dd <- make_sep_dat(n_time = 2, reps = TRUE)
 
     theta <- c(log(1), qlogis((0.2 + 1) / 2), ar1_to_theta(0.3))
@@ -1469,6 +1469,21 @@ test_that("separable simulation reports current limitation", {
                    start = list(theta = theta),
                    map = list(theta = factor(rep(NA, length(theta)))))
 
-    expect_error(simulate(fit, nsim = 1),
-                 "simulation is not yet implemented for separable covariance structures")
+    sims <- simulate(fit, nsim = 2)
+    expect_s3_class(sims, "data.frame")
+    expect_equal(dim(sims), c(nrow(dd), 2L))
+    expect_true(all(vapply(sims, is.numeric, logical(1))))
+
+    case <- make_sep_margin_chain_case(
+        list(make_dense_margin("us", n = 2),
+             make_ar1_margin("hetar1", n = 3),
+             make_toep_margin("homtoep", n = 2)),
+        vars = c("member", "time", "item"),
+        scale_mode = "product"
+    )
+    fit3 <- fit_fixed_theta(case$form, case$dd, case$theta)
+    sims3 <- simulate(fit3, nsim = 1)
+    expect_s3_class(sims3, "data.frame")
+    expect_equal(dim(sims3), c(nrow(case$dd), 1L))
+    expect_true(is.numeric(sims3[[1]]))
 })

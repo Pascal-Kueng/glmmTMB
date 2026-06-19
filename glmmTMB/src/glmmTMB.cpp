@@ -813,6 +813,27 @@ Type separable_dense_nll(array<Type> &U, const vector<Type>& cell_sd,
   return ans;
 }
 
+template <class Type>
+void simulate_separable_product(array<Type> &U, const vector<Type>& cell_sd,
+				const matrix<Type>& corr,
+				per_term_info<Type>& term) {
+  density::MVNORM_t<Type> density(corr);
+  for (int g = 0; g < term.blockReps; g++) {
+    switch(term.simCode) {
+    case fix_simcode:
+      break;
+    case zero_simcode:
+      for (int k = 0; k < U.rows(); k++) U(k, g) = Type(0);
+      break;
+    case random_simcode:
+      U.col(g) = cell_sd * density.simulate();
+      break;
+    default:
+      error("unknown simcode");
+    }
+  }
+}
+
 bool is_separable_corr_matrix_kind(int kind) {
   return kind == dense_corr_sep || kind == ar1_sep || kind == diag_sep ||
     kind == spatial_sep || kind == toep_sep;
@@ -1391,9 +1412,6 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
     // (`sepDispatch`) plus coordinate-order metadata (`sepDensityKinds`,
     // `sepScaleMode`, `sepScaleSpec`).  Products up to four margins use
     // nested TMB SEPARABLE calls; longer products use a dense fallback.
-    if (do_simulate)
-      error("simulation is not yet implemented for separable covariance structures");
-
     check_separable_metadata(term);
     switch (term.sepDispatch(0)) {
     case corr_matrix_product_dispatch: {
@@ -1418,6 +1436,8 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
       } else {
 	ans += separable_dense_nll(U, sep.cell_sd, sep.corr, term);
       }
+      if (do_simulate)
+	simulate_separable_product(U, sep.cell_sd, sep.corr, term);
       DISABLE_AD {
 	report_separable_product(sep.cell_sd, sep.corr, term);
       }
