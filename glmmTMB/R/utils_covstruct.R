@@ -293,9 +293,7 @@ parseNumLevels <- function(levels) {
     toep = 5L
 )
 
-.sep_dispatch_code <- c(dense_ar1 = 1L, dense_dense = 2L,
-                        ar1_ar1 = 3L, diag_dense = 4L,
-                        diag_ar1 = 5L, diag_diag = 6L)
+.sep_dispatch_code <- c(corr_corr = 1L)
 
 .sep_scale_mode_code <- c(
     margin = 1L,          # one margin supplies absolute SDs
@@ -304,60 +302,22 @@ parseNumLevels <- function(levels) {
     selected_product = 4L    # selected margin scales multiply
 )
 
-.sep_supported_pairs <- list(
-    list(
-        dispatch = "dense_dense",
-        density_kinds = c("dense_corr", "dense_corr"),
-        allowed_codes = list(dense_corr = c("cs", "homcs", "us"))
-    ),
-    list(
-        dispatch = "dense_ar1",
-        density_kinds = c("dense_corr", "ar1"),
-        allowed_codes = list(dense_corr = c("cs", "homcs", "us"))
-    ),
-    list(
-        dispatch = "ar1_ar1",
-        density_kinds = c("ar1", "ar1"),
-        allowed_codes = list()
-    ),
-    list(
-        dispatch = "diag_dense",
-        density_kinds = c("diag", "dense_corr"),
-        allowed_codes = list(diag = c("diag", "homdiag"),
-                             dense_corr = c("cs", "homcs", "us"))
-    ),
-    list(
-        dispatch = "diag_ar1",
-        density_kinds = c("diag", "ar1"),
-        allowed_codes = list(diag = c("diag", "homdiag"))
-    ),
-    list(
-        dispatch = "diag_diag",
-        density_kinds = c("diag", "diag"),
-        allowed_codes = list(diag = c("diag", "homdiag"))
-    )
+.sep_corr_matrix_codes <- list(
+    dense_corr = c("cs", "homcs", "us"),
+    ar1 = c("ar1", "hetar1"),
+    diag = c("diag", "homdiag")
 )
 
 .sep_pair_dispatch <- function(regs) {
-    ## Order-insensitive lookup for the C++ evaluator for a margin pair.
     kinds <- vapply(regs, `[[`, character(1), "density_kind")
     codes <- vapply(regs, `[[`, character(1), "code")
-    for (pair in .sep_supported_pairs) {
-        if (!identical(unname(sort(kinds)),
-                       unname(sort(pair$density_kinds)))) {
-            next
+    for (i in seq_along(regs)) {
+        if (!kinds[[i]] %in% names(.sep_corr_matrix_codes) ||
+            !codes[[i]] %in% .sep_corr_matrix_codes[[kinds[[i]]]]) {
+            return(NA_character_)
         }
-        allowed <- pair$allowed_codes
-        allowed_ok <- TRUE
-        for (kind in names(allowed)) {
-            codes_for_kind <- codes[kinds == kind]
-            allowed_ok <- allowed_ok &&
-                length(codes_for_kind) > 0L &&
-                all(codes_for_kind %in% allowed[[kind]])
-        }
-        if (allowed_ok) return(pair$dispatch)
     }
-    NA_character_
+    "corr_corr"
 }
 
 .sep_margin_label <- function(x) {
