@@ -324,7 +324,7 @@ parseNumLevels <- function(levels) {
     toep = 5L
 )
 
-.sep_dispatch_code <- c(dense_ar1 = 1L)
+.sep_dispatch_code <- c(dense_ar1 = 1L, dense_dense = 2L)
 
 .sep_scale_mode_code <- c(
     margin = 1L,          # one margin supplies absolute SDs
@@ -334,6 +334,11 @@ parseNumLevels <- function(levels) {
 )
 
 .sep_supported_pairs <- list(
+    list(
+        dispatch = "dense_dense",
+        density_kinds = c("dense_corr", "dense_corr"),
+        allowed_codes = list(dense_corr = c("cs", "homcs", "us"))
+    ),
     list(
         dispatch = "dense_ar1",
         density_kinds = c("dense_corr", "ar1"),
@@ -487,7 +492,7 @@ parseNumLevels <- function(levels) {
 
     stop("separable() frontend parsed ", .sep_margin_label(margins),
          ", but the backend currently only evaluates cs(), homcs(), or us() ",
-         "crossed with ar1().")
+         "crossed with ar1() or another dense-correlation margin.")
 }
 
 .sep_restruc_info <- function(spec, cnms, blksize) {

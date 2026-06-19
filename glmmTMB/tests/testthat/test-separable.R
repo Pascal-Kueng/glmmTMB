@@ -176,6 +176,138 @@ expect_separable_dense_nll <- function(case) {
     expect_equal(unname(sep_nll), unname(dense_nll), tolerance = 1e-6)
 }
 
+make_dense_margin <- function(struc = c("cs", "homcs", "us"), n = 2,
+                              sd = seq(0.8, 1.2, length.out = n),
+                              rho = 0.25) {
+    struc <- match.arg(struc)
+    R <- if (struc %in% c("cs", "homcs")) {
+        M <- matrix(rho, n, n)
+        diag(M) <- 1
+        M
+    } else {
+        outer(seq_len(n), seq_len(n),
+              function(i, j) ifelse(i == j, 1, rho^abs(i - j)))
+    }
+    list(
+        struc = struc,
+        sd = if (struc == "homcs") sd[[1]] else sd,
+        R = R,
+        scale_theta = log(if (struc == "homcs") sd[[1]] else sd),
+        corr_theta = if (struc %in% c("cs", "homcs")) homcs_to_theta(rho, n)
+                     else put_cor(R)
+    )
+}
+
+make_sep_dense_dense_case <- function(struc0 = c("cs", "homcs", "us"),
+                                      struc1 = c("cs", "homcs", "us"),
+                                      scale_mode = c("global", "product",
+                                                     "selected_first",
+                                                     "selected_second"),
+                                      n0 = 2, n1 = 3) {
+    struc0 <- match.arg(struc0)
+    struc1 <- match.arg(struc1)
+    scale_mode <- match.arg(scale_mode)
+    m0 <- make_dense_margin(struc0, n0, rho = 0.2)
+    m1 <- make_dense_margin(struc1, n1, sd = seq(1.1, 1.4, length.out = n1),
+                            rho = 0.35)
+    global_sd <- 1.3
+
+    dd <- expand.grid(member = factor(paste0("m", seq_len(n0))),
+                      item = factor(paste0("i", seq_len(n1))),
+                      group = factor(seq_len(2)))
+    dd$y <- 0
+
+    margin_call <- function(struc, var) {
+        as.call(list(as.name(struc),
+                     as.call(list(as.name("+"), 0, as.name(var)))))
+    }
+    call0 <- margin_call(struc0, "member")
+    call1 <- margin_call(struc1, "item")
+    scale_call <- switch(scale_mode,
+        global = quote(global()),
+        product = quote(product()),
+        selected_first = as.call(list(as.name("product"), call0)),
+        selected_second = as.call(list(as.name("product"), call1))
+    )
+    sep_call <- as.call(list(
+        as.name("separable"),
+        as.call(list(as.name("|"),
+                     as.call(list(as.name("%x%"), call0, call1)),
+                     quote(group))),
+        scale = scale_call
+    ))
+    form <- as.formula(as.call(list(quote(`~`), quote(y),
+        as.call(list(quote(`+`), 1, sep_call)))))
+
+    theta0 <- switch(scale_mode,
+        global = m0$corr_theta,
+        product = c(m0$scale_theta, m0$corr_theta),
+        selected_first = c(m0$scale_theta, m0$corr_theta),
+        selected_second = m0$corr_theta
+    )
+    theta1 <- switch(scale_mode,
+        global = m1$corr_theta,
+        product = c(m1$scale_theta, m1$corr_theta),
+        selected_first = m1$corr_theta,
+        selected_second = c(m1$scale_theta, m1$corr_theta)
+    )
+    theta <- if (scale_mode == "global") {
+        c(log(global_sd), theta0, theta1)
+    } else {
+        c(theta0, theta1)
+    }
+
+    sd0 <- if (length(m0$sd) == 1L) rep(m0$sd, n0) else m0$sd
+    sd1 <- if (length(m1$sd) == 1L) rep(m1$sd, n1) else m1$sd
+    sd_full <- switch(scale_mode,
+        global = rep(global_sd, n0 * n1),
+        product = as.vector(outer(sd0, sd1)),
+        selected_first = rep(sd0, n1),
+        selected_second = rep(sd1, each = n0)
+    )
+    R_full <- kronecker(m1$R, m0$R)
+
+    list(form = form,
+         dense_form = y ~ 1 + us(sepgrid(member, item) + 0 | group),
+         dd = dd,
+         theta = theta,
+         theta_dense = c(log(sd_full), put_cor(R_full)),
+         R_full = R_full,
+         sd_full = sd_full,
+         codes = unname(c(.valid_covstruct[[struc0]],
+                          .valid_covstruct[[struc1]])),
+         kinds = c(1L, 1L),
+         scale_mode = switch(scale_mode,
+             global = 2L, product = 3L,
+             selected_first = 4L, selected_second = 4L),
+         scale_spec = switch(scale_mode,
+             global = integer(), product = c(0L, 1L),
+             selected_first = 0L, selected_second = 1L))
+}
+
+expect_separable_dense_dense_vc <- function(case) {
+    fit <- fit_fixed_theta(case$form, case$dd, case$theta)
+    restruc <- fit$modelInfo$reStruc$condReStruc[[1]]
+    vc <- VarCorr(fit)$cond[[1]]
+
+    expect_equal(restruc$sepCodes, case$codes)
+    expect_equal(restruc$sepDensityKinds, case$kinds)
+    expect_equal(restruc$sepDispatch, 2L)
+    expect_equal(restruc$sepScaleMode, case$scale_mode)
+    expect_equal(restruc$sepScaleSpec, case$scale_spec)
+    expect_equal(unname(attr(vc, "stddev")), case$sd_full, tolerance = 1e-6)
+    expect_equal(unname(attr(vc, "correlation")), case$R_full, tolerance = 1e-6)
+}
+
+expect_separable_dense_dense_nll <- function(case) {
+    b <- seq(-0.35, 0.45,
+             length.out = length(case$sd_full) * nlevels(case$dd$group))
+    sep_nll <- joint_nll_at(case$form, case$dd, case$theta, b)
+    dense_nll <- joint_nll_at(case$dense_form, case$dd, case$theta_dense, b)
+
+    expect_equal(unname(sep_nll), unname(dense_nll), tolerance = 1e-6)
+}
+
 test_that("sepgrid builds complete two-dimensional levels", {
     member <- factor(c("A", "B"), levels = c("A", "B"))
     time <- factor(c(1, 3), levels = 1:3)
@@ -542,6 +674,28 @@ test_that("separable likelihood matches dense MVN for supported dense x ar1 pair
         make_sep_case("us", scale_mode = "selected_product")
     )
     invisible(lapply(cases, expect_separable_dense_nll))
+})
+
+test_that("separable reports kronecker covariance for supported dense x dense pairs", {
+    cases <- list(
+        make_sep_dense_dense_case("cs", "cs", scale_mode = "global"),
+        make_sep_dense_dense_case("homcs", "cs", scale_mode = "product"),
+        make_sep_dense_dense_case("us", "homcs", scale_mode = "selected_first"),
+        make_sep_dense_dense_case("cs", "us", scale_mode = "selected_second"),
+        make_sep_dense_dense_case("us", "us", scale_mode = "product")
+    )
+    invisible(lapply(cases, expect_separable_dense_dense_vc))
+})
+
+test_that("separable likelihood matches dense MVN for supported dense x dense pairs", {
+    cases <- list(
+        make_sep_dense_dense_case("cs", "cs", scale_mode = "global"),
+        make_sep_dense_dense_case("homcs", "cs", scale_mode = "product"),
+        make_sep_dense_dense_case("us", "homcs", scale_mode = "selected_first"),
+        make_sep_dense_dense_case("cs", "us", scale_mode = "selected_second"),
+        make_sep_dense_dense_case("us", "us", scale_mode = "product")
+    )
+    invisible(lapply(cases, expect_separable_dense_dense_nll))
 })
 
 test_that("separable dense x ar1 models fit successfully", {

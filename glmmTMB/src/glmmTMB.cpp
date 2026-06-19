@@ -111,7 +111,8 @@ enum separable_dispatch {
   // Order-insensitive evaluator codes for separable covariance structures.
   // The coordinate order is still carried by sepDensityKinds/sepCodes; dispatch
   // only says which likelihood evaluator is appropriate for the margin pair.
-  dense_ar1_dispatch = 1
+  dense_ar1_dispatch = 1,
+  dense_dense_dispatch = 2
 };
 
 enum separable_scale_mode {
@@ -668,6 +669,118 @@ void report_separable_dense_ar1(vector<Type> cell_sd, matrix<Type> dense_corr,
   }
 }
 
+template <class Type, class Density0, class Density1>
+Type separable_dense_dense_nll(array<Type> &U, vector<Type> cell_sd,
+			       Density0 density0, Density1 density1,
+			       per_term_info<Type>& term) {
+  // Evaluate one dense-correlation x dense-correlation separable block.
+  int n0 = term.sepDims(0);
+  int n1 = term.sepDims(1);
+  vector<int> dim(2);
+  dim << n0, n1;
+  Type ans = 0;
+
+  for (int g = 0; g < term.blockReps; g++) {
+    array<Type> z(dim);
+    Type logscale = 0;
+    for (int i1 = 0; i1 < n1; i1++) {
+      for (int i0 = 0; i0 < n0; i0++) {
+	int k = i0 + n0 * i1;
+	z(i0, i1) = U(k, g) / cell_sd(k);
+	logscale += log(cell_sd(k));
+      }
+    }
+    ans += density::SEPARABLE(density1, density0)(z) + logscale;
+  }
+  return ans;
+}
+
+template <class Type>
+struct sep_dense_dense_pars {
+  // Parsed parameters for two dense-correlation margins.
+  int code0;
+  int code1;
+  vector<Type> cell_sd;
+  matrix<Type> corr0;
+  matrix<Type> corr1;
+  vector<Type> us_corr_params0;
+  vector<Type> us_corr_params1;
+};
+
+template <class Type>
+sep_dense_dense_pars<Type> parse_separable_dense_dense(vector<Type> theta,
+						       per_term_info<Type>& term) {
+  sep_dense_dense_pars<Type> out;
+  for (int m = 0; m < 2; m++) {
+    if (term.sepDensityKinds(m) != dense_corr_sep)
+      error("separable covariance currently requires two dense margins");
+  }
+
+  out.code0 = term.sepCodes(0);
+  out.code1 = term.sepCodes(1);
+  out.cell_sd.resize(term.blockSize);
+  out.cell_sd.fill(Type(1));
+  out.us_corr_params0.resize(0);
+  out.us_corr_params1.resize(0);
+  Type global_sd = Type(1);
+  vector<Type> sd0(term.sepDims(0));
+  vector<Type> sd1(term.sepDims(1));
+  sd0.fill(Type(1));
+  sd1.fill(Type(1));
+
+  int theta_pos = 0;
+  if (term.sepScaleMode(0) == global_sep_scale)
+    global_sd = exp(theta(theta_pos++));
+
+  parse_separable_dense_margin(out.code0, term.sepDims(0), theta, theta_pos,
+			       separable_margin_has_scale(term, 0),
+			       sd0, out.corr0, out.us_corr_params0);
+  parse_separable_dense_margin(out.code1, term.sepDims(1), theta, theta_pos,
+			       separable_margin_has_scale(term, 1),
+			       sd1, out.corr1, out.us_corr_params1);
+
+  int n0 = term.sepDims(0);
+  int n1 = term.sepDims(1);
+  for (int i1 = 0; i1 < n1; i1++) {
+    for (int i0 = 0; i0 < n0; i0++) {
+      int k = i0 + n0 * i1;
+      out.cell_sd(k) = global_sd * sd0(i0) * sd1(i1);
+    }
+  }
+  if (theta_pos != theta.size())
+    error("separable covariance theta parsing mismatch");
+
+  return out;
+}
+
+template <class Type>
+void report_separable_dense_dense(vector<Type> cell_sd, matrix<Type> corr0,
+				  matrix<Type> corr1,
+				  per_term_info<Type>& term) {
+  int n0 = term.sepDims(0);
+  int n1 = term.sepDims(1);
+  int n = n0 * n1;
+  term.sd.resize(n);
+  term.sd = cell_sd;
+  if (term.fullCor == 1) {
+    term.corr.resize(n, n);
+    for (int b1 = 0; b1 < n1; b1++) {
+      for (int a1 = 0; a1 < n0; a1++) {
+	int k1 = a1 + n0 * b1;
+	for (int b2 = 0; b2 < n1; b2++) {
+	  for (int a2 = 0; a2 < n0; a2++) {
+	    int k2 = a2 + n0 * b2;
+	    term.corr(k1, k2) = corr0(a1, a2) * corr1(b1, b2);
+	  }
+	}
+      }
+    }
+  } else {
+    term.corr.resize(1,1);
+    term.corr(0,0) = NAN;
+  }
+}
+
 
 // compute log-likelihood of b (conditional modes) conditional on theta (var/cov)
 //  for a specified random-effects term 
@@ -1145,6 +1258,43 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
 	}
       } else {
 	error("unsupported dense margin for separable covariance structure");
+      }
+      break;
+    }
+    case dense_dense_dispatch: {
+      sep_dense_dense_pars<Type> sep = parse_separable_dense_dense(theta, term);
+      if (sep.code0 == us_covstruct && sep.code1 == us_covstruct) {
+	density::UNSTRUCTURED_CORR_t<Type> density0(sep.us_corr_params0);
+	density::UNSTRUCTURED_CORR_t<Type> density1(sep.us_corr_params1);
+	ans += separable_dense_dense_nll(U, sep.cell_sd, density0, density1, term);
+	DISABLE_AD {
+	  report_separable_dense_dense(sep.cell_sd, density0.cov(),
+				       density1.cov(), term);
+	}
+      } else if (sep.code0 == us_covstruct) {
+	density::UNSTRUCTURED_CORR_t<Type> density0(sep.us_corr_params0);
+	density::MVNORM_t<Type> density1(sep.corr1);
+	ans += separable_dense_dense_nll(U, sep.cell_sd, density0, density1, term);
+	DISABLE_AD {
+	  report_separable_dense_dense(sep.cell_sd, density0.cov(),
+				       sep.corr1, term);
+	}
+      } else if (sep.code1 == us_covstruct) {
+	density::MVNORM_t<Type> density0(sep.corr0);
+	density::UNSTRUCTURED_CORR_t<Type> density1(sep.us_corr_params1);
+	ans += separable_dense_dense_nll(U, sep.cell_sd, density0, density1, term);
+	DISABLE_AD {
+	  report_separable_dense_dense(sep.cell_sd, sep.corr0,
+				       density1.cov(), term);
+	}
+      } else {
+	density::MVNORM_t<Type> density0(sep.corr0);
+	density::MVNORM_t<Type> density1(sep.corr1);
+	ans += separable_dense_dense_nll(U, sep.cell_sd, density0, density1, term);
+	DISABLE_AD {
+	  report_separable_dense_dense(sep.cell_sd, sep.corr0,
+				       sep.corr1, term);
+	}
       }
       break;
     }

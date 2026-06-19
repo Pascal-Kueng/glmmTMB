@@ -986,6 +986,7 @@ getGrpVar <- function(x)
 ##' @param reXterms terms objects corresponding to each RE term
 ##' @param fr model frame
 ##' @param aa additional arguments (i.e. rank, or var-cov matrix)
+##' @param sepSpecs internal separable covariance specifications
 ##' @inheritParams glmmTMBControl
 ##' @return a list
 ##' \item{blockNumTheta}{number of variance covariance parameters per term}

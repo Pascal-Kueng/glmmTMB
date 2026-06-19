@@ -12,7 +12,8 @@ getReStruc(
   aa = NULL,
   reXterms = NULL,
   fr = NULL,
-  full_cor = NULL
+  full_cor = NULL,
+  sepSpecs = NULL
 )
 }
 \arguments{
@@ -30,6 +31,8 @@ matrix (\code{"us"}) for all blocks).}
 \item{fr}{model frame}
 
 \item{full_cor}{compute full correlation matrices? can be either a length-1 logical vector (TRUE/FALSE) to include full correlation matrices for all or none of the random-effect terms in the model, or a logical vector with length equal to the number of correlation matrices, to include/exclude correlation matrices individually}
+
+\item{sepSpecs}{internal separable covariance specifications}
 }
 \value{
 a list
