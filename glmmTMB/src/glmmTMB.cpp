@@ -441,14 +441,13 @@ struct terms_t : vector<per_term_info<Type> > {
   }
 };
 
-template <class Type, class DenseDensity>
-Type separable_dense_ar1_nll(array<Type> &U, vector<Type> cell_sd, Type phi,
-				     DenseDensity dense_density,
-				     per_term_info<Type>& term,
-				     int dense_margin, int ar1_margin) {
-  // Evaluate one dense-correlation x AR(1) separable block without forming the
-  // full Kronecker covariance matrix. TMB's SEPARABLE arguments are supplied in
-  // reverse array-dimension order.
+template <class Type, class Density0, class Density1>
+Type separable_2d_nll(array<Type> &U, const vector<Type>& cell_sd,
+		      Density0 density0, Density1 density1,
+		      per_term_info<Type>& term) {
+  // Evaluate a two-margin separable block without forming the full Kronecker
+  // covariance matrix. TMB's SEPARABLE arguments are supplied in reverse
+  // array-dimension order.
   int n0 = term.sepDims(0);
   int n1 = term.sepDims(1);
   vector<int> dim(2);
@@ -468,13 +467,7 @@ Type separable_dense_ar1_nll(array<Type> &U, vector<Type> cell_sd, Type phi,
         logscale += log(cell_sd(k));
       }
     }
-    if (dense_margin == 0 && ar1_margin == 1) {
-      ans += density::SEPARABLE(density::AR1(phi), dense_density)(z) + logscale;
-    } else if (dense_margin == 1 && ar1_margin == 0) {
-      ans += density::SEPARABLE(dense_density, density::AR1(phi))(z) + logscale;
-    } else {
-      error("invalid separable dense/AR1 margin order");
-    }
+    ans += density::SEPARABLE(density1, density0)(z) + logscale;
   }
   return ans;
 }
@@ -484,7 +477,6 @@ struct sep_dense_ar1_pars {
   // Parsed parameters for one dense-correlation margin crossed with one AR(1)
   // margin.
   int dense_margin;
-  int ar1_margin;
   int dense_code;
   Type phi;
   vector<Type> cell_sd;
@@ -508,7 +500,7 @@ matrix<Type> compound_symmetry_corr(int n, Type corr_transf) {
 }
 
 template <class Type>
-void parse_separable_dense_margin(int code, int n, vector<Type> theta,
+void parse_separable_dense_margin(int code, int n, const vector<Type>& theta,
 				  int& theta_pos, bool scale_here,
 				  vector<Type>& margin_sd,
 				  matrix<Type>& corr,
@@ -565,26 +557,118 @@ void check_separable_metadata(per_term_info<Type>& term) {
 }
 
 template <class Type>
-sep_dense_ar1_pars<Type> parse_separable_dense_ar1(vector<Type> theta,
+vector<Type> separable_cell_sd(Type global_sd, const vector<Type>& sd0,
+			       const vector<Type>& sd1) {
+  int n0 = sd0.size();
+  int n1 = sd1.size();
+  vector<Type> cell_sd(n0 * n1);
+  for (int i1 = 0; i1 < n1; i1++) {
+    for (int i0 = 0; i0 < n0; i0++) {
+      int k = i0 + n0 * i1;
+      cell_sd(k) = global_sd * sd0(i0) * sd1(i1);
+    }
+  }
+  return cell_sd;
+}
+
+template <class Type>
+matrix<Type> ar1_corr(int n, Type phi) {
+  matrix<Type> corr(n, n);
+  for (int i = 0; i < n; i++)
+    for (int j = 0; j < n; j++)
+      corr(i, j) = pow(phi, abs(i - j));
+  return corr;
+}
+
+template <class Type>
+void report_separable_2d(const vector<Type>& cell_sd,
+			 const matrix<Type>& corr0,
+			 const matrix<Type>& corr1,
+			 per_term_info<Type>& term) {
+  // Build report objects for VarCorr().
+  int n0 = term.sepDims(0);
+  int n1 = term.sepDims(1);
+  term.sd = cell_sd;
+  if (term.fullCor == 1) {
+    // Construct the full correlation only for reporting/testing.
+    int n = n0 * n1;
+    term.corr.resize(n, n);
+    for (int b1 = 0; b1 < n1; b1++) {
+      for (int a1 = 0; a1 < n0; a1++) {
+        int k1 = a1 + n0 * b1;
+        for (int b2 = 0; b2 < n1; b2++) {
+          for (int a2 = 0; a2 < n0; a2++) {
+            int k2 = a2 + n0 * b2;
+            term.corr(k1, k2) = corr0(a1, a2) * corr1(b1, b2);
+          }
+        }
+      }
+    }
+  } else {
+    // Follow the existing compact-report convention for structured covariance
+    // terms that do not store the whole correlation matrix.
+    term.corr.resize(1,1);
+    term.corr(0,0) = NAN;
+  }
+}
+
+template <class Type, class DenseDensity>
+Type eval_separable_dense_ar1(array<Type> &U,
+			      const sep_dense_ar1_pars<Type>& sep,
+			      DenseDensity dense_density,
+			      const matrix<Type>& dense_corr,
+			      per_term_info<Type>& term) {
+  Type ans = 0;
+  if (sep.dense_margin == 0) {
+    ans += separable_2d_nll(U, sep.cell_sd, dense_density,
+			    density::AR1(sep.phi), term);
+  } else {
+    ans += separable_2d_nll(U, sep.cell_sd, density::AR1(sep.phi),
+			    dense_density, term);
+  }
+  DISABLE_AD {
+    if (sep.dense_margin == 0)
+      report_separable_2d(sep.cell_sd, dense_corr,
+			  ar1_corr(term.sepDims(1), sep.phi), term);
+    else
+      report_separable_2d(sep.cell_sd,
+			  ar1_corr(term.sepDims(0), sep.phi),
+			  dense_corr, term);
+  }
+  return ans;
+}
+
+template <class Type, class Density0, class Density1>
+Type eval_separable_2d(array<Type> &U, const vector<Type>& cell_sd,
+		       Density0 density0, Density1 density1,
+		       const matrix<Type>& corr0, const matrix<Type>& corr1,
+		       per_term_info<Type>& term) {
+  Type ans = separable_2d_nll(U, cell_sd, density0, density1, term);
+  DISABLE_AD {
+    report_separable_2d(cell_sd, corr0, corr1, term);
+  }
+  return ans;
+}
+
+template <class Type>
+sep_dense_ar1_pars<Type> parse_separable_dense_ar1(const vector<Type>& theta,
 						   per_term_info<Type>& term) {
   // Theta is consumed in the same margin order used by the R-side parameter
   // counter.
   sep_dense_ar1_pars<Type> out;
   out.dense_margin = -1;
-  out.ar1_margin = -1;
+  int ar1_margin = -1;
 
   for (int m = 0; m < 2; m++) {
     if (term.sepDensityKinds(m) == dense_corr_sep) out.dense_margin = m;
-    if (term.sepDensityKinds(m) == ar1_sep) out.ar1_margin = m;
+    if (term.sepDensityKinds(m) == ar1_sep) ar1_margin = m;
   }
-  if (out.dense_margin < 0 || out.ar1_margin < 0 ||
-      out.dense_margin == out.ar1_margin)
+  if (out.dense_margin < 0 || ar1_margin < 0 ||
+      out.dense_margin == ar1_margin)
     error("separable covariance currently requires one dense margin and one AR1 margin");
 
   out.dense_code = term.sepCodes(out.dense_margin);
   out.phi = Type(0);
-  out.cell_sd.resize(term.blockSize);
-  out.cell_sd.fill(Type(1));
   out.us_corr_params.resize(0);
   Type global_sd = Type(1);
   vector<Type> sd0(term.sepDims(0));
@@ -617,82 +701,11 @@ sep_dense_ar1_pars<Type> parse_separable_dense_ar1(vector<Type> theta,
       error("unsupported dense margin for separable covariance structure");
     }
   }
-  int n0 = term.sepDims(0);
-  int n1 = term.sepDims(1);
-  for (int i1 = 0; i1 < n1; i1++) {
-    for (int i0 = 0; i0 < n0; i0++) {
-      int k = i0 + n0 * i1;
-      out.cell_sd(k) = global_sd * sd0(i0) * sd1(i1);
-    }
-  }
+  out.cell_sd = separable_cell_sd(global_sd, sd0, sd1);
   if (theta_pos != theta.size())
     error("separable covariance theta parsing mismatch");
 
   return out;
-}
-
-template <class Type>
-void report_separable_dense_ar1(vector<Type> cell_sd, matrix<Type> dense_corr,
-				Type phi, per_term_info<Type>& term,
-				int dense_margin, int ar1_margin) {
-  // Build report objects for VarCorr().
-  int n0 = term.sepDims(0);
-  int n1 = term.sepDims(1);
-  int n = n0 * n1;
-  term.sd.resize(n);
-  term.sd = cell_sd;
-  if (term.fullCor == 1) {
-    // Construct the full correlation only for reporting/testing.
-    term.corr.resize(n, n);
-    for (int b1 = 0; b1 < n1; b1++) {
-      for (int a1 = 0; a1 < n0; a1++) {
-        int k1 = a1 + n0 * b1;
-        for (int b2 = 0; b2 < n1; b2++) {
-          for (int a2 = 0; a2 < n0; a2++) {
-            int k2 = a2 + n0 * b2;
-            Type c0 = (dense_margin == 0 ?
-                       dense_corr(a1, a2) :
-                       pow(phi, abs(a1 - a2)));
-            Type c1 = (dense_margin == 1 ?
-                       dense_corr(b1, b2) :
-                       pow(phi, abs(b1 - b2)));
-            term.corr(k1, k2) = c0 * c1;
-          }
-        }
-      }
-    }
-  } else {
-    // Follow the existing compact-report convention for structured covariance
-    // terms that do not store the whole correlation matrix.
-    term.corr.resize(1,1);
-    term.corr(0,0) = NAN;
-  }
-}
-
-template <class Type, class Density0, class Density1>
-Type separable_dense_dense_nll(array<Type> &U, vector<Type> cell_sd,
-			       Density0 density0, Density1 density1,
-			       per_term_info<Type>& term) {
-  // Evaluate one dense-correlation x dense-correlation separable block.
-  int n0 = term.sepDims(0);
-  int n1 = term.sepDims(1);
-  vector<int> dim(2);
-  dim << n0, n1;
-  Type ans = 0;
-
-  for (int g = 0; g < term.blockReps; g++) {
-    array<Type> z(dim);
-    Type logscale = 0;
-    for (int i1 = 0; i1 < n1; i1++) {
-      for (int i0 = 0; i0 < n0; i0++) {
-	int k = i0 + n0 * i1;
-	z(i0, i1) = U(k, g) / cell_sd(k);
-	logscale += log(cell_sd(k));
-      }
-    }
-    ans += density::SEPARABLE(density1, density0)(z) + logscale;
-  }
-  return ans;
 }
 
 template <class Type>
@@ -708,7 +721,7 @@ struct sep_dense_dense_pars {
 };
 
 template <class Type>
-sep_dense_dense_pars<Type> parse_separable_dense_dense(vector<Type> theta,
+sep_dense_dense_pars<Type> parse_separable_dense_dense(const vector<Type>& theta,
 						       per_term_info<Type>& term) {
   sep_dense_dense_pars<Type> out;
   for (int m = 0; m < 2; m++) {
@@ -718,8 +731,6 @@ sep_dense_dense_pars<Type> parse_separable_dense_dense(vector<Type> theta,
 
   out.code0 = term.sepCodes(0);
   out.code1 = term.sepCodes(1);
-  out.cell_sd.resize(term.blockSize);
-  out.cell_sd.fill(Type(1));
   out.us_corr_params0.resize(0);
   out.us_corr_params1.resize(0);
   Type global_sd = Type(1);
@@ -738,47 +749,11 @@ sep_dense_dense_pars<Type> parse_separable_dense_dense(vector<Type> theta,
   parse_separable_dense_margin(out.code1, term.sepDims(1), theta, theta_pos,
 			       separable_margin_has_scale(term, 1),
 			       sd1, out.corr1, out.us_corr_params1);
-
-  int n0 = term.sepDims(0);
-  int n1 = term.sepDims(1);
-  for (int i1 = 0; i1 < n1; i1++) {
-    for (int i0 = 0; i0 < n0; i0++) {
-      int k = i0 + n0 * i1;
-      out.cell_sd(k) = global_sd * sd0(i0) * sd1(i1);
-    }
-  }
+  out.cell_sd = separable_cell_sd(global_sd, sd0, sd1);
   if (theta_pos != theta.size())
     error("separable covariance theta parsing mismatch");
 
   return out;
-}
-
-template <class Type>
-void report_separable_dense_dense(vector<Type> cell_sd, matrix<Type> corr0,
-				  matrix<Type> corr1,
-				  per_term_info<Type>& term) {
-  int n0 = term.sepDims(0);
-  int n1 = term.sepDims(1);
-  int n = n0 * n1;
-  term.sd.resize(n);
-  term.sd = cell_sd;
-  if (term.fullCor == 1) {
-    term.corr.resize(n, n);
-    for (int b1 = 0; b1 < n1; b1++) {
-      for (int a1 = 0; a1 < n0; a1++) {
-	int k1 = a1 + n0 * b1;
-	for (int b2 = 0; b2 < n1; b2++) {
-	  for (int a2 = 0; a2 < n0; a2++) {
-	    int k2 = a2 + n0 * b2;
-	    term.corr(k1, k2) = corr0(a1, a2) * corr1(b1, b2);
-	  }
-	}
-      }
-    }
-  } else {
-    term.corr.resize(1,1);
-    term.corr(0,0) = NAN;
-  }
 }
 
 
@@ -1242,20 +1217,12 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
       sep_dense_ar1_pars<Type> sep = parse_separable_dense_ar1(theta, term);
       if (sep.dense_code == cs_covstruct || sep.dense_code == homcs_covstruct) {
 	density::MVNORM_t<Type> dense_density(sep.dense_corr);
-	ans += separable_dense_ar1_nll(U, sep.cell_sd, sep.phi, dense_density, term,
-				       sep.dense_margin, sep.ar1_margin);
-	DISABLE_AD {
-	  report_separable_dense_ar1(sep.cell_sd, sep.dense_corr, sep.phi, term,
-				     sep.dense_margin, sep.ar1_margin);
-	}
+	ans += eval_separable_dense_ar1(U, sep, dense_density,
+					sep.dense_corr, term);
       } else if (sep.dense_code == us_covstruct) {
 	density::UNSTRUCTURED_CORR_t<Type> dense_density(sep.us_corr_params);
-	ans += separable_dense_ar1_nll(U, sep.cell_sd, sep.phi, dense_density, term,
-				       sep.dense_margin, sep.ar1_margin);
-	DISABLE_AD {
-	  report_separable_dense_ar1(sep.cell_sd, dense_density.cov(), sep.phi, term,
-				     sep.dense_margin, sep.ar1_margin);
-	}
+	ans += eval_separable_dense_ar1(U, sep, dense_density,
+					dense_density.cov(), term);
       } else {
 	error("unsupported dense margin for separable covariance structure");
       }
@@ -1266,35 +1233,23 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
       if (sep.code0 == us_covstruct && sep.code1 == us_covstruct) {
 	density::UNSTRUCTURED_CORR_t<Type> density0(sep.us_corr_params0);
 	density::UNSTRUCTURED_CORR_t<Type> density1(sep.us_corr_params1);
-	ans += separable_dense_dense_nll(U, sep.cell_sd, density0, density1, term);
-	DISABLE_AD {
-	  report_separable_dense_dense(sep.cell_sd, density0.cov(),
-				       density1.cov(), term);
-	}
+	ans += eval_separable_2d(U, sep.cell_sd, density0, density1,
+				 density0.cov(), density1.cov(), term);
       } else if (sep.code0 == us_covstruct) {
 	density::UNSTRUCTURED_CORR_t<Type> density0(sep.us_corr_params0);
 	density::MVNORM_t<Type> density1(sep.corr1);
-	ans += separable_dense_dense_nll(U, sep.cell_sd, density0, density1, term);
-	DISABLE_AD {
-	  report_separable_dense_dense(sep.cell_sd, density0.cov(),
-				       sep.corr1, term);
-	}
+	ans += eval_separable_2d(U, sep.cell_sd, density0, density1,
+				 density0.cov(), sep.corr1, term);
       } else if (sep.code1 == us_covstruct) {
 	density::MVNORM_t<Type> density0(sep.corr0);
 	density::UNSTRUCTURED_CORR_t<Type> density1(sep.us_corr_params1);
-	ans += separable_dense_dense_nll(U, sep.cell_sd, density0, density1, term);
-	DISABLE_AD {
-	  report_separable_dense_dense(sep.cell_sd, sep.corr0,
-				       density1.cov(), term);
-	}
+	ans += eval_separable_2d(U, sep.cell_sd, density0, density1,
+				 sep.corr0, density1.cov(), term);
       } else {
 	density::MVNORM_t<Type> density0(sep.corr0);
 	density::MVNORM_t<Type> density1(sep.corr1);
-	ans += separable_dense_dense_nll(U, sep.cell_sd, density0, density1, term);
-	DISABLE_AD {
-	  report_separable_dense_dense(sep.cell_sd, sep.corr0,
-				       sep.corr1, term);
-	}
+	ans += eval_separable_2d(U, sep.cell_sd, density0, density1,
+				 sep.corr0, sep.corr1, term);
       }
       break;
     }

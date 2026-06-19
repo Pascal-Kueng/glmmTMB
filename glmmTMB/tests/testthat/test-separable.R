@@ -145,28 +145,35 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
     list(form = form, dense_form = dense_form, theta = theta,
          theta_dense = c(log(sd_full), put_cor(R_full)),
          R_full = R_full, sd_full = sd_full,
-         codes = codes, kinds = kinds, scale_mode = scale_mode_code,
+         codes = codes, kinds = kinds, dispatch = 1L,
+         scale_mode = scale_mode_code,
          scale_spec = scale_spec,
          n_member = n_member, n_time = n_time)
 }
 
-expect_separable_vc <- function(case) {
-    dd <- make_sep_dat(n_member = case$n_member, n_time = case$n_time, reps = TRUE)
+case_data <- function(case, reps = FALSE, n_group = 2) {
+    if (!is.null(case$dd)) return(case$dd)
+    make_sep_dat(n_member = case$n_member, n_time = case$n_time,
+                 n_group = n_group, reps = reps)
+}
+
+expect_separable_case_vc <- function(case) {
+    dd <- case_data(case, reps = TRUE)
     fit <- fit_fixed_theta(case$form, dd, case$theta)
     restruc <- fit$modelInfo$reStruc$condReStruc[[1]]
     vc <- VarCorr(fit)$cond[[1]]
 
     expect_equal(restruc$sepCodes, case$codes)
     expect_equal(restruc$sepDensityKinds, case$kinds)
-    expect_equal(restruc$sepDispatch, 1L)
+    expect_equal(restruc$sepDispatch, case$dispatch)
     expect_equal(restruc$sepScaleMode, case$scale_mode)
     expect_equal(restruc$sepScaleSpec, case$scale_spec)
     expect_equal(unname(attr(vc, "stddev")), case$sd_full, tolerance = 1e-6)
     expect_equal(unname(attr(vc, "correlation")), case$R_full, tolerance = 1e-6)
 }
 
-expect_separable_dense_nll <- function(case) {
-    dd <- make_sep_dat(n_member = case$n_member, n_time = case$n_time, n_group = 2)
+expect_separable_case_nll <- function(case) {
+    dd <- case_data(case, n_group = 2)
     dd$y <- 0
     b <- seq(-0.4, 0.5, length.out = length(case$sd_full) * nlevels(dd$group))
 
@@ -277,35 +284,13 @@ make_sep_dense_dense_case <- function(struc0 = c("cs", "homcs", "us"),
          codes = unname(c(.valid_covstruct[[struc0]],
                           .valid_covstruct[[struc1]])),
          kinds = c(1L, 1L),
+         dispatch = 2L,
          scale_mode = switch(scale_mode,
              global = 2L, product = 3L,
              selected_first = 4L, selected_second = 4L),
          scale_spec = switch(scale_mode,
              global = integer(), product = c(0L, 1L),
              selected_first = 0L, selected_second = 1L))
-}
-
-expect_separable_dense_dense_vc <- function(case) {
-    fit <- fit_fixed_theta(case$form, case$dd, case$theta)
-    restruc <- fit$modelInfo$reStruc$condReStruc[[1]]
-    vc <- VarCorr(fit)$cond[[1]]
-
-    expect_equal(restruc$sepCodes, case$codes)
-    expect_equal(restruc$sepDensityKinds, case$kinds)
-    expect_equal(restruc$sepDispatch, 2L)
-    expect_equal(restruc$sepScaleMode, case$scale_mode)
-    expect_equal(restruc$sepScaleSpec, case$scale_spec)
-    expect_equal(unname(attr(vc, "stddev")), case$sd_full, tolerance = 1e-6)
-    expect_equal(unname(attr(vc, "correlation")), case$R_full, tolerance = 1e-6)
-}
-
-expect_separable_dense_dense_nll <- function(case) {
-    b <- seq(-0.35, 0.45,
-             length.out = length(case$sd_full) * nlevels(case$dd$group))
-    sep_nll <- joint_nll_at(case$form, case$dd, case$theta, b)
-    dense_nll <- joint_nll_at(case$dense_form, case$dd, case$theta_dense, b)
-
-    expect_equal(unname(sep_nll), unname(dense_nll), tolerance = 1e-6)
 }
 
 test_that("sepgrid builds complete two-dimensional levels", {
@@ -658,7 +643,7 @@ test_that("separable reports kronecker covariance for supported dense x ar1 pair
         make_sep_case("homcs", scale_mode = "product"),
         make_sep_case("us", reversed = TRUE, scale_mode = "selected_product")
     )
-    invisible(lapply(cases, expect_separable_vc))
+    invisible(lapply(cases, expect_separable_case_vc))
 })
 
 test_that("separable likelihood matches dense MVN for supported dense x ar1 pairs", {
@@ -673,7 +658,7 @@ test_that("separable likelihood matches dense MVN for supported dense x ar1 pair
         make_sep_case("homcs", reversed = TRUE, scale_mode = "product"),
         make_sep_case("us", scale_mode = "selected_product")
     )
-    invisible(lapply(cases, expect_separable_dense_nll))
+    invisible(lapply(cases, expect_separable_case_nll))
 })
 
 test_that("separable reports kronecker covariance for supported dense x dense pairs", {
@@ -684,7 +669,7 @@ test_that("separable reports kronecker covariance for supported dense x dense pa
         make_sep_dense_dense_case("cs", "us", scale_mode = "selected_second"),
         make_sep_dense_dense_case("us", "us", scale_mode = "product")
     )
-    invisible(lapply(cases, expect_separable_dense_dense_vc))
+    invisible(lapply(cases, expect_separable_case_vc))
 })
 
 test_that("separable likelihood matches dense MVN for supported dense x dense pairs", {
@@ -695,7 +680,7 @@ test_that("separable likelihood matches dense MVN for supported dense x dense pa
         make_sep_dense_dense_case("cs", "us", scale_mode = "selected_second"),
         make_sep_dense_dense_case("us", "us", scale_mode = "product")
     )
-    invisible(lapply(cases, expect_separable_dense_dense_nll))
+    invisible(lapply(cases, expect_separable_case_nll))
 })
 
 test_that("separable dense x ar1 models fit successfully", {

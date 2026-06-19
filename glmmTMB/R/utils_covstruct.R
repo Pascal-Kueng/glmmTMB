@@ -255,65 +255,34 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_margin_entry <- function(code, density_kind, n_scale, n_corr) {
+    n_scale_fun <- if (is.function(n_scale)) n_scale else function(n) n_scale
+    n_corr_fun <- if (is.function(n_corr)) n_corr else function(n) n_corr
     list(
         code = code,
         density_kind = density_kind,
-        can_scale = n_scale > 0L,
-        n_scale = function(n) as.integer(n_scale),
-        n_corr = function(n) as.integer(n_corr(n))
+        can_scale = is.function(n_scale) || as.integer(n_scale) > 0L,
+        n_scale = function(n) as.integer(n_scale_fun(n)),
+        n_corr = function(n) as.integer(n_corr_fun(n))
     )
 }
 
 .sep_margin_registry <- list(
-    diag = list(
-        code = "diag",
-        density_kind = "diag",
-        can_scale = TRUE,
-        n_scale = function(n) as.integer(n),
-        n_corr = function(n) 0L
-    ),
-    homdiag = .sep_margin_entry("homdiag", "diag", 1L, function(n) 0L),
-    cs = list(
-        code = "cs",
-        density_kind = "dense_corr",
-        can_scale = TRUE,
-        n_scale = function(n) as.integer(n),
-        n_corr = function(n) 1L
-    ),
-    homcs = .sep_margin_entry("homcs", "dense_corr", 1L, function(n) 1L),
-    us = list(
-        code = "us",
-        density_kind = "dense_corr",
-        can_scale = TRUE,
-        n_scale = function(n) as.integer(n),
-        n_corr = function(n) as.integer(n * (n - 1L) / 2L)
-    ),
-    ar1 = .sep_margin_entry("ar1", "ar1", 0L, function(n) 1L),
-    hetar1 = list(
-        code = "hetar1",
-        density_kind = "ar1",
-        can_scale = TRUE,
-        n_scale = function(n) as.integer(n),
-        n_corr = function(n) 1L
-    ),
-    ou = .sep_margin_entry("ou", "spatial", 0L, function(n) 1L),
-    exp = .sep_margin_entry("exp", "spatial", 0L, function(n) 1L),
-    gau = .sep_margin_entry("gau", "spatial", 0L, function(n) 1L),
-    mat = .sep_margin_entry("mat", "spatial", 0L, function(n) 2L),
-    toep = list(
-        code = "toep",
-        density_kind = "toep",
-        can_scale = TRUE,
-        n_scale = function(n) as.integer(n),
-        n_corr = function(n) as.integer(n - 1L)
-    ),
-    homtoep = list(
-        code = "homtoep",
-        density_kind = "toep",
-        can_scale = TRUE,
-        n_scale = function(n) 1L,
-        n_corr = function(n) as.integer(n - 1L)
-    )
+    diag = .sep_margin_entry("diag", "diag", function(n) n, 0L),
+    homdiag = .sep_margin_entry("homdiag", "diag", 1L, 0L),
+    cs = .sep_margin_entry("cs", "dense_corr", function(n) n, 1L),
+    homcs = .sep_margin_entry("homcs", "dense_corr", 1L, 1L),
+    us = .sep_margin_entry("us", "dense_corr", function(n) n,
+                           function(n) n * (n - 1L) / 2L),
+    ar1 = .sep_margin_entry("ar1", "ar1", 0L, 1L),
+    hetar1 = .sep_margin_entry("hetar1", "ar1", function(n) n, 1L),
+    ou = .sep_margin_entry("ou", "spatial", 0L, 1L),
+    exp = .sep_margin_entry("exp", "spatial", 0L, 1L),
+    gau = .sep_margin_entry("gau", "spatial", 0L, 1L),
+    mat = .sep_margin_entry("mat", "spatial", 0L, 2L),
+    toep = .sep_margin_entry("toep", "toep", function(n) n,
+                             function(n) n - 1L),
+    homtoep = .sep_margin_entry("homtoep", "toep", 1L,
+                                function(n) n - 1L)
 )
 
 .sep_density_kind_code <- c(
@@ -433,21 +402,21 @@ parseNumLevels <- function(levels) {
         }
     } else if (identical(scale_mode, "selected_product")) {
         scale_spec <- scale$margins
-        scale_margin <- integer()
-        for (i in seq_len(nrow(scale_spec))) {
-            scale_match <- which(margins$struc == scale_spec$struc[i] &
-                                 margins$var == scale_spec$var[i])
-            if (length(scale_match) != 1L) {
-                stop("separable() scale margin ", scale_spec$struc[i], "(",
-                     scale_spec$var[i], ") must match one of the specified ",
-                     "margins.")
-            }
-            if (!regs[[scale_match]]$can_scale) {
-                stop("separable() scale = ", scale_spec$struc[i], "(",
-                     scale_spec$var[i], ") selects a correlation-only margin. ",
-                     "Use a scale-capable margin or scale = global().")
-            }
-            scale_margin <- c(scale_margin, scale_match)
+        margin_key <- paste(margins$struc, margins$var, sep = "\r")
+        scale_key <- paste(scale_spec$struc, scale_spec$var, sep = "\r")
+        scale_margin <- match(scale_key, margin_key)
+        if (anyNA(scale_margin)) {
+            i <- which(is.na(scale_margin))[[1]]
+            stop("separable() scale margin ", scale_spec$struc[i], "(",
+                 scale_spec$var[i], ") must match one of the specified ",
+                 "margins.")
+        }
+        scale_ok <- vapply(regs[scale_margin], `[[`, logical(1), "can_scale")
+        if (!all(scale_ok)) {
+            i <- which(!scale_ok)[[1]]
+            stop("separable() scale = ", scale_spec$struc[i], "(",
+                 scale_spec$var[i], ") selects a correlation-only margin. ",
+                 "Use a scale-capable margin or scale = global().")
         }
         if (anyDuplicated(scale_margin)) {
             stop("separable() scale margins must be unique.")
@@ -465,31 +434,8 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_stop_unsupported_pair <- function(margins, regs, scale = NULL) {
-    ## Unsupported separable combinations often fail because the likelihood
-    ## dispatch has not been implemented yet.  However, scale ambiguity is a
-    ## separate and important design issue, so diagnose that first when possible.
-    can_scale <- vapply(regs, `[[`, logical(1), "can_scale")
-
-    if ((is.null(scale) || identical(scale$mode, "auto")) &&
-        sum(can_scale) == 0L) {
-        stop("separable() margins ", .sep_margin_label(margins),
-             " define only a correlation product. Use scale = global() ",
-             "to add an overall scale.")
-    }
-
-    if ((is.null(scale) || identical(scale$mode, "auto")) && sum(can_scale) > 1L) {
-        stop("More than one separable() margin can carry scale in ",
-             .sep_margin_label(margins), ". Please specify the scale mode ",
-             "explicitly, for example scale = global(), scale = product(), ",
-             "or scale = ", margins$struc[which(can_scale)[1]],
-             "(", margins$var[which(can_scale)[1]], "). This covariance pair ",
-             "is also outside the current dense x ar1 backend.")
-    }
-
-    if (!is.null(scale) && !identical(scale$mode, "auto")) {
-        .sep_scale_info(margins, regs, scale)
-    }
-
+    ## Diagnose scale errors before reporting unsupported density combinations.
+    .sep_scale_info(margins, regs, scale)
     stop("separable() frontend parsed ", .sep_margin_label(margins),
          ", but the backend currently only evaluates cs(), homcs(), or us() ",
          "crossed with ar1() or another dense-correlation margin.")
@@ -591,7 +537,7 @@ parseNumLevels <- function(levels) {
     ##
     ## into an internal product-design representation.  Margins may contain
     ## multiple no-intercept columns; the current backend still supports only
-    ## two margins and the dense-correlation x AR(1) evaluator.
+    ## two margins and selected dense-correlation/AR(1) combinations.
     if (!is.call(bar_expr) || !identical(.sep_call_name(bar_expr), "|") ||
         length(bar_expr) != 3L) {
         stop("separable() product syntax must look like ",
@@ -751,10 +697,6 @@ parseNumLevels <- function(levels) {
     reXterms
 }
 
-.sep_spec_id_call <- function(id) {
-    as.integer(id)
-}
-
 .rewrite_separable_expr <- function(x, specs) {
     ## Walk the formula call tree and rewrite rich separable calls into the
     ## lower-level form that `reformulas::splitForm()` already understands:
@@ -788,7 +730,7 @@ parseNumLevels <- function(levels) {
             specs[[id]] <- spec
             return(list(expr = as.call(list(as.name("separable"),
                                             spec$grid_expr,
-                                            .sep_spec_id_call(id))),
+                                            as.integer(id))),
                         specs = specs))
         }
 
