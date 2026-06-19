@@ -98,16 +98,16 @@ enum valid_covStruct {
   separable_covstruct = 16
 };
 
-enum separable_density_kind {
-  // These values must match `.sep_density_kind_code` in R/utils_covstruct.R.
+enum separable_builder_kind {
+  // These values must match `.sep_builder_kind_code` in R/utils_covstruct.R.
   // They are deliberately separate from valid_covStruct: many covariance
-  // structures can share the same separable density kind.  For example, homcs
+  // structures can share the same separable builder kind.  For example, homcs
   // and us are both "dense correlation" margins in the current prototype.
-  dense_corr_sep = 1,
-  ar1_sep = 2,
-  diag_sep = 3,
-  spatial_sep = 4,
-  toep_sep = 5
+  dense_corr_builder = 1,
+  ar1_builder = 2,
+  diag_builder = 3,
+  spatial_builder = 4,
+  toep_builder = 5
 };
 
 enum separable_dispatch {
@@ -356,7 +356,7 @@ struct per_term_info {
   //   flat index = coord1 + sepDims(0) * coord2
   //
   // `sepCodes` stores the covariance-structure code for each margin in this
-  // same order.  `sepDensityKinds` is a smaller C++ margin-kind code:
+  // same order.  `sepBuilderKinds` is a smaller C++ margin-builder code:
   //
   //   1 = dense correlation margin (currently cs, homcs, or us)
   //   2 = AR(1) correlation margin (currently ar1 or hetar1)
@@ -373,7 +373,7 @@ struct per_term_info {
   // no SDs, one homogeneous SD, or one SD per margin level.
   vector<int> sepDims;
   vector<int> sepCodes;
-  vector<int> sepDensityKinds;
+  vector<int> sepBuilderKinds;
   vector<int> sepScaleKinds;
   vector<int> sepDispatch;
   vector<int> sepScaleMode;
@@ -431,10 +431,10 @@ struct terms_t : vector<per_term_info<Type> > {
 	RObjectTestExpectedType(scodes, &Rf_isNumeric, "sepCodes");
 	(*this)(i).sepCodes = asVector<int>(scodes);
       }
-      SEXP skinds = getListElement(y, "sepDensityKinds");
+      SEXP skinds = getListElement(y, "sepBuilderKinds");
       if(!Rf_isNull(skinds)){
-	RObjectTestExpectedType(skinds, &Rf_isNumeric, "sepDensityKinds");
-	(*this)(i).sepDensityKinds = asVector<int>(skinds);
+	RObjectTestExpectedType(skinds, &Rf_isNumeric, "sepBuilderKinds");
+	(*this)(i).sepBuilderKinds = asVector<int>(skinds);
       }
       SEXP sscalekinds = getListElement(y, "sepScaleKinds");
       if(!Rf_isNull(sscalekinds)){
@@ -569,7 +569,7 @@ bool separable_margin_has_scale(per_term_info<Type>& term, int m) {
 
 struct sep_margin_spec {
   int code;
-  int kind;
+  int builder_kind;
   int scale_kind;
   int n;
   int index;
@@ -580,7 +580,7 @@ template <class Type>
 sep_margin_spec separable_margin_spec(per_term_info<Type>& term, int m) {
   sep_margin_spec spec;
   spec.code = term.sepCodes(m);
-  spec.kind = term.sepDensityKinds(m);
+  spec.builder_kind = term.sepBuilderKinds(m);
   spec.scale_kind = term.sepScaleKinds(m);
   spec.n = term.sepDims(m);
   spec.index = m;
@@ -742,7 +742,7 @@ void parse_separable_spatial_margin(const sep_margin_spec& margin,
 template <class Type>
 void check_separable_metadata(per_term_info<Type>& term) {
   if (term.sepDims.size() < 2 || term.sepCodes.size() != term.sepDims.size() ||
-      term.sepDensityKinds.size() != term.sepDims.size() ||
+      term.sepBuilderKinds.size() != term.sepDims.size() ||
       term.sepScaleKinds.size() != term.sepDims.size() ||
       term.sepDispatch.size() != 1 ||
       term.sepScaleMode.size() != 1)
@@ -871,8 +871,8 @@ void simulate_separable_product(array<Type> &U, const vector<Type>& cell_sd,
 }
 
 bool is_separable_corr_matrix_kind(int kind) {
-  return kind == dense_corr_sep || kind == ar1_sep || kind == diag_sep ||
-    kind == spatial_sep || kind == toep_sep;
+  return kind == dense_corr_builder || kind == ar1_builder ||
+    kind == diag_builder || kind == spatial_builder || kind == toep_builder;
 }
 
 template <class Type>
@@ -888,13 +888,13 @@ sep_margin_cov<Type> build_separable_margin_cov(sep_margin_spec margin,
 						per_term_info<Type>& term) {
   sep_margin_cov<Type> out;
 
-  if (margin.kind == diag_sep) {
+  if (margin.builder_kind == diag_builder) {
     parse_separable_diag_margin(margin, theta, theta_pos, out.sd, out.corr);
-  } else if (margin.kind == ar1_sep) {
+  } else if (margin.builder_kind == ar1_builder) {
     Type phi = Type(0);
     parse_separable_ar1_margin(margin, theta, theta_pos, out.sd, phi);
     out.corr = ar1_corr(margin.n, phi);
-  } else if (margin.kind == dense_corr_sep) {
+  } else if (margin.builder_kind == dense_corr_builder) {
     vector<Type> us_corr_params(0);
     parse_separable_dense_margin(margin, theta, theta_pos, out.sd,
 				 out.corr, us_corr_params);
@@ -902,9 +902,9 @@ sep_margin_cov<Type> build_separable_margin_cov(sep_margin_spec margin,
       density::UNSTRUCTURED_CORR_t<Type> us_density(us_corr_params);
       out.corr = us_density.cov();
     }
-  } else if (margin.kind == toep_sep) {
+  } else if (margin.builder_kind == toep_builder) {
     parse_separable_toep_margin(margin, theta, theta_pos, out.sd, out.corr);
-  } else if (margin.kind == spatial_sep) {
+  } else if (margin.builder_kind == spatial_builder) {
     matrix<Type> dist = separable_margin_dist(term, margin.index);
     parse_separable_spatial_margin(margin, theta, theta_pos, dist,
 				   out.sd, out.corr);
@@ -945,7 +945,7 @@ sep_corr_product_pars<Type> parse_separable_corr_product(const vector<Type>& the
   sep_corr_product_pars<Type> out;
   int n_margin = term.sepDims.size();
   for (int m = 0; m < n_margin; m++) {
-    int kind = term.sepDensityKinds(m);
+    int kind = term.sepBuilderKinds(m);
     if (!is_separable_corr_matrix_kind(kind))
       error("unsupported separable margin for correlation-matrix evaluator");
   }
@@ -1426,7 +1426,7 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
   }
   else if (term.blockCode == separable_covstruct) {
     // R validates the separable margins and supplies an evaluator code
-    // (`sepDispatch`) plus coordinate-order metadata (`sepDensityKinds`,
+    // (`sepDispatch`) plus coordinate-order metadata (`sepBuilderKinds`,
     // `sepScaleKinds`, `sepScaleMode`, `sepScaleSpec`). Products up to four
     // margins use nested TMB SEPARABLE calls; longer products use a dense
     // fallback.

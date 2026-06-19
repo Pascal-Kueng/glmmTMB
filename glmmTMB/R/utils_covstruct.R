@@ -242,69 +242,114 @@ parseNumLevels <- function(levels) {
     x
 }
 
-.sep_margin_entry <- function(code, density_kind, n_scale, n_corr,
-                              can_auto_scale = NULL, scale_kind = NULL,
-                              dist_coord_dim = NULL) {
-    n_scale_fun <- if (is.function(n_scale)) n_scale else function(n) n_scale
-    n_corr_fun <- if (is.function(n_corr)) n_corr else function(n) n_corr
-    can_scale <- is.function(n_scale) || as.integer(n_scale) > 0L
-    if (is.null(can_auto_scale)) can_auto_scale <- can_scale
-    if (is.null(scale_kind)) {
-        scale_kind <- if (!can_scale) {
-            "none"
-        } else if (is.function(n_scale)) {
-            "heterogeneous"
-        } else if (identical(as.integer(n_scale), 1L)) {
-            "homogeneous"
-        } else {
-            stop("Unsupported separable() scale parameterization for ", code,
-                 ". Use scale_kind explicitly.")
-        }
-    }
-    if (!scale_kind %in% c("none", "homogeneous", "heterogeneous")) {
-        stop("Unknown separable() scale_kind for ", code, ": ", scale_kind)
-    }
+.sep_theta <- function(corr) {
+    corr_fun <- if (is.function(corr)) corr else function(n) corr
+    list(n_corr = function(n) as.integer(corr_fun(n)))
+}
+
+.sep_scale <- function(kind = c("none", "homogeneous", "heterogeneous"),
+                       n = 0L, auto = NULL) {
+    kind <- match.arg(kind)
+    n_fun <- if (is.function(n)) n else function(d) n
+    can_scale <- !identical(kind, "none")
+    if (is.null(auto)) auto <- can_scale
+    list(kind = kind,
+         can_scale = can_scale,
+         can_auto_scale = auto,
+         n = function(d) as.integer(n_fun(d)))
+}
+
+.sep_metadata <- function(dist_coord_dim = NULL) {
     needs_dist <- !is.null(dist_coord_dim)
     if (needs_dist && !(length(dist_coord_dim) == 1L &&
                         (is.na(dist_coord_dim) || dist_coord_dim >= 1L))) {
-        stop("Unsupported separable() distance metadata for ", code)
+        stop("Unsupported separable() distance metadata.")
+    }
+    list(needs_dist = needs_dist,
+         dist_coord_dim = if (needs_dist) as.integer(dist_coord_dim) else NA_integer_)
+}
+
+.sep_margin_entry <- function(code, builder, scale, theta,
+                              metadata = .sep_metadata()) {
+    if (is.null(scale$kind) || !is.function(scale$n) ||
+        is.null(scale$can_scale) || is.null(scale$can_auto_scale)) {
+        stop("Malformed separable() scale contract for ", code)
+    }
+    if (!is.function(theta$n_corr)) {
+        stop("Malformed separable() theta contract for ", code)
+    }
+    if (is.null(metadata$needs_dist) || is.null(metadata$dist_coord_dim)) {
+        stop("Malformed separable() metadata contract for ", code)
+    }
+    if (!scale$kind %in% c("none", "homogeneous", "heterogeneous")) {
+        stop("Unknown separable() scale kind for ", code, ": ", scale$kind)
     }
     list(
         code = code,
-        density_kind = density_kind,
-        scale_kind = scale_kind,
-        needs_dist = needs_dist,
-        dist_coord_dim = if (needs_dist) as.integer(dist_coord_dim) else NA_integer_,
-        can_scale = can_scale,
-        can_auto_scale = can_auto_scale,
-        n_scale = function(n) as.integer(n_scale_fun(n)),
-        n_corr = function(n) as.integer(n_corr_fun(n))
+        builder = builder,
+        scale = scale,
+        theta = theta,
+        metadata = metadata,
+        builder_kind = builder,
+        scale_kind = scale$kind,
+        needs_dist = metadata$needs_dist,
+        dist_coord_dim = metadata$dist_coord_dim,
+        can_scale = scale$can_scale,
+        can_auto_scale = scale$can_auto_scale,
+        n_scale = scale$n,
+        n_corr = theta$n_corr
     )
 }
 
 .sep_margin_registry <- list(
-    diag = .sep_margin_entry("diag", "diag", function(n) n, 0L),
-    homdiag = .sep_margin_entry("homdiag", "diag", 1L, 0L),
-    cs = .sep_margin_entry("cs", "dense_corr", function(n) n, 1L),
-    homcs = .sep_margin_entry("homcs", "dense_corr", 1L, 1L),
-    us = .sep_margin_entry("us", "dense_corr", function(n) n,
-                           function(n) n * (n - 1L) / 2L),
-    ar1 = .sep_margin_entry("ar1", "ar1", 1L, 1L,
-                            can_auto_scale = FALSE),
-    hetar1 = .sep_margin_entry("hetar1", "ar1", function(n) n, 1L),
-    ou = .sep_margin_entry("ou", "spatial", 1L, 1L, dist_coord_dim = 1L),
-    exp = .sep_margin_entry("exp", "spatial", 1L, 1L, dist_coord_dim = NA),
-    gau = .sep_margin_entry("gau", "spatial", 1L, 1L, dist_coord_dim = NA),
-    mat = .sep_margin_entry("mat", "spatial", 1L, 2L, dist_coord_dim = NA),
-    toep = .sep_margin_entry("toep", "toep", function(n) n,
-                             function(n) n - 1L),
-    homtoep = .sep_margin_entry("homtoep", "toep", 1L,
-                                function(n) n - 1L)
+    diag = .sep_margin_entry("diag", "diag",
+                             .sep_scale("heterogeneous", function(n) n),
+                             .sep_theta(0L)),
+    homdiag = .sep_margin_entry("homdiag", "diag",
+                                .sep_scale("homogeneous", 1L),
+                                .sep_theta(0L)),
+    cs = .sep_margin_entry("cs", "dense_corr",
+                           .sep_scale("heterogeneous", function(n) n),
+                           .sep_theta(1L)),
+    homcs = .sep_margin_entry("homcs", "dense_corr",
+                              .sep_scale("homogeneous", 1L),
+                              .sep_theta(1L)),
+    us = .sep_margin_entry("us", "dense_corr",
+                           .sep_scale("heterogeneous", function(n) n),
+                           .sep_theta(function(n) n * (n - 1L) / 2L)),
+    ar1 = .sep_margin_entry("ar1", "ar1",
+                            .sep_scale("homogeneous", 1L, auto = FALSE),
+                            .sep_theta(1L)),
+    hetar1 = .sep_margin_entry("hetar1", "ar1",
+                               .sep_scale("heterogeneous", function(n) n),
+                               .sep_theta(1L)),
+    ou = .sep_margin_entry("ou", "spatial",
+                           .sep_scale("homogeneous", 1L),
+                           .sep_theta(1L),
+                           .sep_metadata(dist_coord_dim = 1L)),
+    exp = .sep_margin_entry("exp", "spatial",
+                            .sep_scale("homogeneous", 1L),
+                            .sep_theta(1L),
+                            .sep_metadata(dist_coord_dim = NA)),
+    gau = .sep_margin_entry("gau", "spatial",
+                            .sep_scale("homogeneous", 1L),
+                            .sep_theta(1L),
+                            .sep_metadata(dist_coord_dim = NA)),
+    mat = .sep_margin_entry("mat", "spatial",
+                            .sep_scale("homogeneous", 1L),
+                            .sep_theta(2L),
+                            .sep_metadata(dist_coord_dim = NA)),
+    toep = .sep_margin_entry("toep", "toep",
+                             .sep_scale("heterogeneous", function(n) n),
+                             .sep_theta(function(n) n - 1L)),
+    homtoep = .sep_margin_entry("homtoep", "toep",
+                                .sep_scale("homogeneous", 1L),
+                                .sep_theta(function(n) n - 1L))
 )
 
-## Each supported separable density kind must have a C++ margin builder that
+## Each supported separable builder kind must have a C++ margin builder that
 ## returns a standard-deviation vector and a correlation matrix.
-.sep_density_kind_code <- c(
+.sep_builder_kind_code <- c(
     dense_corr = 1L,
     ar1 = 2L,
     diag = 3L,
@@ -328,8 +373,8 @@ parseNumLevels <- function(levels) {
 )
 
 .sep_dispatch <- function(regs) {
-    kinds <- vapply(regs, `[[`, character(1), "density_kind")
-    if (!all(kinds %in% names(.sep_density_kind_code))) return(NA_character_)
+    kinds <- vapply(regs, `[[`, character(1), "builder_kind")
+    if (!all(kinds %in% names(.sep_builder_kind_code))) return(NA_character_)
     "corr_matrix_product"
 }
 
@@ -435,7 +480,7 @@ parseNumLevels <- function(levels) {
     .sep_scale_info(margins, regs, scale)
     supported <- names(.sep_margin_registry)[
         vapply(.sep_margin_registry, function(x) {
-            x$density_kind %in% names(.sep_density_kind_code)
+            x$builder_kind %in% names(.sep_builder_kind_code)
         }, logical(1))
     ]
     stop("separable() frontend parsed ", .sep_margin_label(margins),
@@ -516,14 +561,14 @@ parseNumLevels <- function(levels) {
         regs[[i]]$n_corr(dims[[i]])
     }, integer(1)))
     ntheta <- scale_ntheta + corr_ntheta
-    density_kind <- vapply(regs, `[[`, character(1), "density_kind")
+    builder_kind <- vapply(regs, `[[`, character(1), "builder_kind")
     scale_kind <- vapply(regs, `[[`, character(1), "scale_kind")
     distance_info <- .sep_distance_info(regs, spec, dims)
 
     list(
         dims = dims,
         codes = as.integer(vapply(strucs, function(z) .valid_covstruct[[z]], numeric(1))),
-        density_kinds = as.integer(.sep_density_kind_code[density_kind]),
+        builder_kinds = as.integer(.sep_builder_kind_code[builder_kind]),
         scale_kinds = as.integer(.sep_scale_kind_code[scale_kind]),
         dispatch = as.integer(.sep_dispatch_code[dispatch]),
         scale_mode = scale_info$mode_code,
@@ -531,7 +576,7 @@ parseNumLevels <- function(levels) {
         dist_starts = distance_info$starts,
         dists = distance_info$dists,
         ntheta = as.integer(ntheta),
-        density_kind = density_kind,
+        builder_kind = builder_kind,
         margins = margins,
         scale = spec$scale
     )

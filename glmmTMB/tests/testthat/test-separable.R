@@ -193,7 +193,7 @@ expect_separable_case_vc <- function(case) {
     vc <- VarCorr(fit)$cond[[1]]
 
     expect_equal(restruc$sepCodes, case$codes)
-    expect_equal(restruc$sepDensityKinds, case$kinds)
+    expect_equal(restruc$sepBuilderKinds, case$kinds)
     expect_equal(restruc$sepScaleKinds, expected_sep_scale_kinds(case))
     expect_equal(restruc$sepDispatch, case$dispatch)
     expect_equal(restruc$sepScaleMode, case$scale_mode)
@@ -942,7 +942,7 @@ test_that("separable specs handle product order", {
     expect_equal(h$condReStruc[[1]]$sepDims, c(3L, 2L))
     expect_equal(h$condReStruc[[1]]$sepCodes,
                  unname(c(.valid_covstruct[["ar1"]], .valid_covstruct[["homcs"]])))
-    expect_equal(h$condReStruc[[1]]$sepDensityKinds, c(2L, 1L))
+    expect_equal(h$condReStruc[[1]]$sepBuilderKinds, c(2L, 1L))
     expect_equal(h$condReStruc[[1]]$sepScaleKinds, c(1L, 1L))
     expect_equal(h$condReStruc[[1]]$sepDispatch, 1L)
     expect_equal(h$condReStruc[[1]]$sepScaleMode, 1L)
@@ -951,7 +951,7 @@ test_that("separable specs handle product order", {
     expect_equal(u$condReStruc[[1]]$blockNumTheta, 4)
     expect_equal(u$condReStruc[[1]]$sepCodes,
                  unname(c(.valid_covstruct[["us"]], .valid_covstruct[["ar1"]])))
-    expect_equal(u$condReStruc[[1]]$sepDensityKinds, c(1L, 2L))
+    expect_equal(u$condReStruc[[1]]$sepBuilderKinds, c(1L, 2L))
     expect_equal(u$condReStruc[[1]]$sepScaleKinds, c(2L, 1L))
     expect_equal(u$condReStruc[[1]]$sepDispatch, 1L)
     expect_equal(u$condReStruc[[1]]$sepScaleMode, 1L)

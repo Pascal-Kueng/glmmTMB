@@ -1150,7 +1150,7 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
             ## dispatch to the separable marginal densities in C++.
             tmp$sepDims <- sepInfo[[i]]$dims
             tmp$sepCodes <- sepInfo[[i]]$codes
-            tmp$sepDensityKinds <- sepInfo[[i]]$density_kinds
+            tmp$sepBuilderKinds <- sepInfo[[i]]$builder_kinds
             tmp$sepScaleKinds <- sepInfo[[i]]$scale_kinds
             tmp$sepDispatch <- sepInfo[[i]]$dispatch
             tmp$sepScaleMode <- sepInfo[[i]]$scale_mode
