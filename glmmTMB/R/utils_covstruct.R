@@ -243,7 +243,8 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_margin_entry <- function(code, density_kind, n_scale, n_corr,
-                              can_auto_scale = NULL, scale_kind = NULL) {
+                              can_auto_scale = NULL, scale_kind = NULL,
+                              dist_coord_dim = NULL) {
     n_scale_fun <- if (is.function(n_scale)) n_scale else function(n) n_scale
     n_corr_fun <- if (is.function(n_corr)) n_corr else function(n) n_corr
     can_scale <- is.function(n_scale) || as.integer(n_scale) > 0L
@@ -263,10 +264,17 @@ parseNumLevels <- function(levels) {
     if (!scale_kind %in% c("none", "homogeneous", "heterogeneous")) {
         stop("Unknown separable() scale_kind for ", code, ": ", scale_kind)
     }
+    needs_dist <- !is.null(dist_coord_dim)
+    if (needs_dist && !(length(dist_coord_dim) == 1L &&
+                        (is.na(dist_coord_dim) || dist_coord_dim >= 1L))) {
+        stop("Unsupported separable() distance metadata for ", code)
+    }
     list(
         code = code,
         density_kind = density_kind,
         scale_kind = scale_kind,
+        needs_dist = needs_dist,
+        dist_coord_dim = if (needs_dist) as.integer(dist_coord_dim) else NA_integer_,
         can_scale = can_scale,
         can_auto_scale = can_auto_scale,
         n_scale = function(n) as.integer(n_scale_fun(n)),
@@ -284,10 +292,10 @@ parseNumLevels <- function(levels) {
     ar1 = .sep_margin_entry("ar1", "ar1", 1L, 1L,
                             can_auto_scale = FALSE),
     hetar1 = .sep_margin_entry("hetar1", "ar1", function(n) n, 1L),
-    ou = .sep_margin_entry("ou", "spatial", 1L, 1L),
-    exp = .sep_margin_entry("exp", "spatial", 1L, 1L),
-    gau = .sep_margin_entry("gau", "spatial", 1L, 1L),
-    mat = .sep_margin_entry("mat", "spatial", 1L, 2L),
+    ou = .sep_margin_entry("ou", "spatial", 1L, 1L, dist_coord_dim = 1L),
+    exp = .sep_margin_entry("exp", "spatial", 1L, 1L, dist_coord_dim = NA),
+    gau = .sep_margin_entry("gau", "spatial", 1L, 1L, dist_coord_dim = NA),
+    mat = .sep_margin_entry("mat", "spatial", 1L, 2L, dist_coord_dim = NA),
     toep = .sep_margin_entry("toep", "toep", function(n) n,
                              function(n) n - 1L),
     homtoep = .sep_margin_entry("homtoep", "toep", 1L,
@@ -435,16 +443,16 @@ parseNumLevels <- function(levels) {
          paste0(supported, "()", collapse = ", "), ".")
 }
 
-.sep_spatial_info <- function(margins, spec, dims) {
-    spatial <- margins$struc %in% c("ou", "exp", "gau", "mat")
+.sep_distance_info <- function(regs, spec, dims) {
+    needs_dist <- vapply(regs, `[[`, logical(1), "needs_dist")
     starts <- rep.int(-1L, length(dims))
     dists <- numeric()
-    if (!any(spatial)) return(list(starts = starts, dists = dists))
+    if (!any(needs_dist)) return(list(starts = starts, dists = dists))
 
     if (is.null(spec$margin_cnms)) {
         stop("separable() spatial margins require product-margin column names.")
     }
-    for (i in which(spatial)) {
+    for (i in which(needs_dist)) {
         coords <- tryCatch(suppressWarnings(parseNumLevels(spec$margin_cnms[[i]])),
                            error = function(e) {
                                stop("separable() spatial margins require ",
@@ -455,8 +463,10 @@ parseNumLevels <- function(levels) {
             stop("separable() spatial margin metadata does not match the ",
                  "product design.")
         }
-        if (margins$struc[[i]] == "ou" && ncol(coords) != 1L) {
-            stop("'ou' separable() margins are for 1D coordinates only.")
+        coord_dim <- regs[[i]]$dist_coord_dim
+        if (!is.na(coord_dim) && ncol(coords) != coord_dim) {
+            stop("'", regs[[i]]$code, "' separable() margins are for ",
+                 coord_dim, "D coordinates only.")
         }
         starts[[i]] <- length(dists)
         dists <- c(dists, as.vector(as.matrix(stats::dist(coords))))
@@ -508,7 +518,7 @@ parseNumLevels <- function(levels) {
     ntheta <- scale_ntheta + corr_ntheta
     density_kind <- vapply(regs, `[[`, character(1), "density_kind")
     scale_kind <- vapply(regs, `[[`, character(1), "scale_kind")
-    spatial_info <- .sep_spatial_info(margins, spec, dims)
+    distance_info <- .sep_distance_info(regs, spec, dims)
 
     list(
         dims = dims,
@@ -518,8 +528,8 @@ parseNumLevels <- function(levels) {
         dispatch = as.integer(.sep_dispatch_code[dispatch]),
         scale_mode = scale_info$mode_code,
         scale_spec = scale_info$spec,
-        dist_starts = spatial_info$starts,
-        dists = spatial_info$dists,
+        dist_starts = distance_info$starts,
+        dists = distance_info$dists,
         ntheta = as.integer(ntheta),
         density_kind = density_kind,
         margins = margins,
