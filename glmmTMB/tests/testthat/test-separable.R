@@ -266,7 +266,8 @@ make_toep_margin <- function(struc = c("toep", "homtoep"), n = 3,
 }
 
 make_spatial_margin <- function(struc = c("ou", "exp", "gau", "mat"),
-                                coords = cbind(seq_len(3)), theta = 0.2) {
+                                coords = cbind(seq_len(3)), theta = 0.2,
+                                sd = 1.15) {
     struc <- match.arg(struc)
     coords <- as.matrix(coords)
     D <- as.matrix(dist(coords))
@@ -288,9 +289,9 @@ make_spatial_margin <- function(struc = c("ou", "exp", "gau", "mat"),
     diag(R) <- 1
     list(
         struc = struc,
-        sd = rep(1, nrow(coords)),
+        sd = sd,
         R = R,
-        scale_theta = numeric(),
+        scale_theta = log(sd),
         corr_theta = theta,
         levels = paste0("(", apply(coords, 1, paste, collapse = ","), ")")
     )
@@ -1403,8 +1404,7 @@ test_that("separable supports spatial correlation margins", {
                  make_spatial_margin("gau", coords = cbind(c(0, 2)),
                                      theta = 0.7)),
             vars = c("space", "member", "time"),
-            scale_mode = "selected_product",
-            scale_index = 2L
+            scale_mode = "product"
         ),
         make_sep_margin_chain_case(
             list(make_spatial_margin("mat", coords = cbind(c(0, 1, 3)),

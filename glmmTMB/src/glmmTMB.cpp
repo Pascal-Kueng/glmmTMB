@@ -661,11 +661,11 @@ void parse_separable_spatial_margin(int code, int n, const vector<Type>& theta,
 				    matrix<Type>& corr) {
   if (!is_spatial_margin(code))
     error("unsupported spatial margin for separable covariance structure");
-  if (scale_here)
-    error("spatial separable margins cannot carry scale parameters");
 
   margin_sd.resize(n);
   margin_sd.fill(Type(1));
+  if (scale_here)
+    margin_sd.fill(exp(theta(theta_pos++)));
   corr.resize(n, n);
 
   Type theta0 = theta(theta_pos++);
