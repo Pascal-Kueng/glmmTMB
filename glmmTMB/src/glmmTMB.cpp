@@ -466,6 +466,13 @@ Type fill_separable_array(array<Type>& z, array<Type> &U,
   return logscale;
 }
 
+template <class Type>
+vector<int> separable_array_dim(per_term_info<Type>& term, int n) {
+  vector<int> dim(n);
+  for (int i = 0; i < n; i++) dim(i) = term.sepDims(i);
+  return dim;
+}
+
 template <class Type, class Density0, class Density1>
 Type separable_2d_nll(array<Type> &U, const vector<Type>& cell_sd,
 		      Density0 density0, Density1 density1,
@@ -473,10 +480,7 @@ Type separable_2d_nll(array<Type> &U, const vector<Type>& cell_sd,
   // Evaluate a two-margin separable block without forming the full Kronecker
   // covariance matrix. TMB's SEPARABLE arguments are supplied in reverse
   // array-dimension order.
-  int n0 = term.sepDims(0);
-  int n1 = term.sepDims(1);
-  vector<int> dim(2);
-  dim << n0, n1;
+  vector<int> dim = separable_array_dim(term, 2);
   Type ans = 0;
 
   for (int g = 0; g < term.blockReps; g++) {
@@ -491,11 +495,7 @@ template <class Type, class Density0, class Density1, class Density2>
 Type separable_3d_nll(array<Type> &U, const vector<Type>& cell_sd,
 		      Density0 density0, Density1 density1, Density2 density2,
 		      per_term_info<Type>& term) {
-  int n0 = term.sepDims(0);
-  int n1 = term.sepDims(1);
-  int n2 = term.sepDims(2);
-  vector<int> dim(3);
-  dim << n0, n1, n2;
+  vector<int> dim = separable_array_dim(term, 3);
   Type ans = 0;
 
   for (int g = 0; g < term.blockReps; g++) {
@@ -513,12 +513,7 @@ template <class Type, class Density0, class Density1, class Density2,
 Type separable_4d_nll(array<Type> &U, const vector<Type>& cell_sd,
 		      Density0 density0, Density1 density1, Density2 density2,
 		      Density3 density3, per_term_info<Type>& term) {
-  int n0 = term.sepDims(0);
-  int n1 = term.sepDims(1);
-  int n2 = term.sepDims(2);
-  int n3 = term.sepDims(3);
-  vector<int> dim(4);
-  dim << n0, n1, n2, n3;
+  vector<int> dim = separable_array_dim(term, 4);
   Type ans = 0;
 
   for (int g = 0; g < term.blockReps; g++) {
@@ -570,6 +565,23 @@ matrix<Type> identity_corr(int n) {
 }
 
 template <class Type>
+void parse_separable_margin_sd(int code, int hom_code, int n,
+			       const vector<Type>& theta, int& theta_pos,
+			       bool scale_here, vector<Type>& margin_sd) {
+  margin_sd.resize(n);
+  margin_sd.fill(Type(1));
+  if (!scale_here) return;
+
+  if (code == hom_code) {
+    margin_sd.fill(exp(theta(theta_pos++)));
+  } else {
+    vector<Type> logsd = theta.segment(theta_pos, n);
+    theta_pos += n;
+    margin_sd = exp(logsd);
+  }
+}
+
+template <class Type>
 void parse_separable_dense_margin(int code, int n, const vector<Type>& theta,
 				  int& theta_pos, bool scale_here,
 				  vector<Type>& margin_sd,
@@ -578,17 +590,8 @@ void parse_separable_dense_margin(int code, int n, const vector<Type>& theta,
   if (!is_dense_corr_margin(code))
     error("unsupported dense margin for separable covariance structure");
 
-  margin_sd.resize(n);
-  margin_sd.fill(Type(1));
-  if (scale_here) {
-    if (code == homcs_covstruct) {
-      margin_sd.fill(exp(theta(theta_pos++)));
-    } else {
-      vector<Type> logsd = theta.segment(theta_pos, n);
-      theta_pos += n;
-      margin_sd = exp(logsd);
-    }
-  }
+  parse_separable_margin_sd(code, homcs_covstruct, n, theta, theta_pos,
+			    scale_here, margin_sd);
 
   if (code == cs_covstruct || code == homcs_covstruct) {
     corr = compound_symmetry_corr(n, theta(theta_pos++));
@@ -607,17 +610,8 @@ void parse_separable_diag_margin(int code, int n, const vector<Type>& theta,
   if (!is_diag_margin(code))
     error("unsupported diagonal margin for separable covariance structure");
 
-  margin_sd.resize(n);
-  margin_sd.fill(Type(1));
-  if (scale_here) {
-    if (code == homdiag_covstruct) {
-      margin_sd.fill(exp(theta(theta_pos++)));
-    } else {
-      vector<Type> logsd = theta.segment(theta_pos, n);
-      theta_pos += n;
-      margin_sd = exp(logsd);
-    }
-  }
+  parse_separable_margin_sd(code, homdiag_covstruct, n, theta, theta_pos,
+			    scale_here, margin_sd);
   corr = identity_corr<Type>(n);
 }
 
@@ -629,17 +623,8 @@ void parse_separable_toep_margin(int code, int n, const vector<Type>& theta,
   if (!is_toep_margin(code))
     error("unsupported Toeplitz margin for separable covariance structure");
 
-  margin_sd.resize(n);
-  margin_sd.fill(Type(1));
-  if (scale_here) {
-    if (code == homtoep_covstruct) {
-      margin_sd.fill(exp(theta(theta_pos++)));
-    } else {
-      vector<Type> logsd = theta.segment(theta_pos, n);
-      theta_pos += n;
-      margin_sd = exp(logsd);
-    }
-  }
+  parse_separable_margin_sd(code, homtoep_covstruct, n, theta, theta_pos,
+			    scale_here, margin_sd);
 
   vector<Type> corr_params = theta.segment(theta_pos, n - 1);
   theta_pos += n - 1;
@@ -744,21 +729,6 @@ void check_separable_metadata(per_term_info<Type>& term) {
 }
 
 template <class Type>
-vector<Type> separable_cell_sd(Type global_sd, const vector<Type>& sd0,
-			       const vector<Type>& sd1) {
-  int n0 = sd0.size();
-  int n1 = sd1.size();
-  vector<Type> cell_sd(n0 * n1);
-  for (int i1 = 0; i1 < n1; i1++) {
-    for (int i0 = 0; i0 < n0; i0++) {
-      int k = i0 + n0 * i1;
-      cell_sd(k) = global_sd * sd0(i0) * sd1(i1);
-    }
-  }
-  return cell_sd;
-}
-
-template <class Type>
 vector<Type> separable_cell_sd(Type global_sd,
 			       const vector<vector<Type> >& margin_sd,
 			       const vector<int>& dims) {
@@ -825,47 +795,10 @@ void report_separable_product(const vector<Type>& cell_sd,
   }
 }
 
-template <class Type, class Density0, class Density1>
-Type eval_separable_2d(array<Type> &U, const vector<Type>& cell_sd,
-		       Density0 density0, Density1 density1,
-		       const matrix<Type>& corr,
-		       per_term_info<Type>& term) {
-  Type ans = separable_2d_nll(U, cell_sd, density0, density1, term);
-  DISABLE_AD {
-    report_separable_product(cell_sd, corr, term);
-  }
-  return ans;
-}
-
-template <class Type, class Density0, class Density1, class Density2>
-Type eval_separable_3d(array<Type> &U, const vector<Type>& cell_sd,
-		       Density0 density0, Density1 density1, Density2 density2,
-		       const matrix<Type>& corr, per_term_info<Type>& term) {
-  Type ans = separable_3d_nll(U, cell_sd, density0, density1, density2, term);
-  DISABLE_AD {
-    report_separable_product(cell_sd, corr, term);
-  }
-  return ans;
-}
-
-template <class Type, class Density0, class Density1, class Density2,
-	  class Density3>
-Type eval_separable_4d(array<Type> &U, const vector<Type>& cell_sd,
-		       Density0 density0, Density1 density1, Density2 density2,
-		       Density3 density3, const matrix<Type>& corr,
-		       per_term_info<Type>& term) {
-  Type ans = separable_4d_nll(U, cell_sd, density0, density1, density2,
-			      density3, term);
-  DISABLE_AD {
-    report_separable_product(cell_sd, corr, term);
-  }
-  return ans;
-}
-
 template <class Type>
-Type eval_separable_dense(array<Type> &U, const vector<Type>& cell_sd,
-			  const matrix<Type>& corr,
-			  per_term_info<Type>& term) {
+Type separable_dense_nll(array<Type> &U, const vector<Type>& cell_sd,
+			 const matrix<Type>& corr,
+			 per_term_info<Type>& term) {
   density::MVNORM_t<Type> density(corr);
   Type ans = 0;
   for (int g = 0; g < term.blockReps; g++) {
@@ -876,9 +809,6 @@ Type eval_separable_dense(array<Type> &U, const vector<Type>& cell_sd,
       logscale += log(cell_sd(k));
     }
     ans += density(z) + logscale;
-  }
-  DISABLE_AD {
-    report_separable_product(cell_sd, corr, term);
   }
   return ans;
 }
@@ -1471,23 +1401,25 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
       if (term.sepDims.size() == 2) {
 	density::MVNORM_t<Type> density0(sep.corr0);
 	density::MVNORM_t<Type> density1(sep.corr1);
-	ans += eval_separable_2d(U, sep.cell_sd, density0, density1,
-				 sep.corr, term);
+	ans += separable_2d_nll(U, sep.cell_sd, density0, density1, term);
       } else if (term.sepDims.size() == 3) {
 	density::MVNORM_t<Type> density0(sep.corr0);
 	density::MVNORM_t<Type> density1(sep.corr1);
 	density::MVNORM_t<Type> density2(sep.corr2);
-	ans += eval_separable_3d(U, sep.cell_sd, density0, density1,
-				 density2, sep.corr, term);
+	ans += separable_3d_nll(U, sep.cell_sd, density0, density1,
+				density2, term);
       } else if (term.sepDims.size() == 4) {
 	density::MVNORM_t<Type> density0(sep.corr0);
 	density::MVNORM_t<Type> density1(sep.corr1);
 	density::MVNORM_t<Type> density2(sep.corr2);
 	density::MVNORM_t<Type> density3(sep.corr3);
-	ans += eval_separable_4d(U, sep.cell_sd, density0, density1,
-				 density2, density3, sep.corr, term);
+	ans += separable_4d_nll(U, sep.cell_sd, density0, density1,
+				density2, density3, term);
       } else {
-	ans += eval_separable_dense(U, sep.cell_sd, sep.corr, term);
+	ans += separable_dense_nll(U, sep.cell_sd, sep.corr, term);
+      }
+      DISABLE_AD {
+	report_separable_product(sep.cell_sd, sep.corr, term);
       }
       break;
     }
