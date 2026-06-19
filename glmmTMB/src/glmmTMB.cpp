@@ -888,10 +888,7 @@ sep_corr_margin_pars<Type> parse_separable_corr_margin(int code, int kind,
 template <class Type>
 struct sep_corr_product_pars {
   vector<Type> cell_sd;
-  matrix<Type> corr0;
-  matrix<Type> corr1;
-  matrix<Type> corr2;
-  matrix<Type> corr3;
+  std::vector<matrix<Type> > margin_corr;
   matrix<Type> corr;
 };
 
@@ -929,6 +926,7 @@ sep_corr_product_pars<Type> parse_separable_corr_product(const vector<Type>& the
     global_sd = exp(theta(theta_pos++));
 
   vector<vector<Type> > margin_sd(n_margin);
+  out.margin_corr.reserve(n_margin);
   for (int m = 0; m < n_margin; m++) {
     sep_corr_margin_pars<Type> margin =
       parse_separable_corr_margin(term.sepCodes(m), term.sepDensityKinds(m),
@@ -936,18 +934,9 @@ sep_corr_product_pars<Type> parse_separable_corr_product(const vector<Type>& the
 				  separable_margin_has_scale(term, m),
 				  term, m);
     margin_sd(m) = margin.sd;
+    out.margin_corr.push_back(margin.corr);
     if (m == 0) {
-      out.corr0 = margin.corr;
       out.corr = margin.corr;
-    } else if (m == 1) {
-      out.corr1 = margin.corr;
-      out.corr = kronecker_corr(margin.corr, out.corr);
-    } else if (m == 2) {
-      out.corr2 = margin.corr;
-      out.corr = kronecker_corr(margin.corr, out.corr);
-    } else if (m == 3) {
-      out.corr3 = margin.corr;
-      out.corr = kronecker_corr(margin.corr, out.corr);
     } else {
       out.corr = kronecker_corr(margin.corr, out.corr);
     }
@@ -1417,20 +1406,20 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
     case corr_matrix_product_dispatch: {
       sep_corr_product_pars<Type> sep = parse_separable_corr_product(theta, term);
       if (term.sepDims.size() == 2) {
-	density::MVNORM_t<Type> density0(sep.corr0);
-	density::MVNORM_t<Type> density1(sep.corr1);
+	density::MVNORM_t<Type> density0(sep.margin_corr[0]);
+	density::MVNORM_t<Type> density1(sep.margin_corr[1]);
 	ans += separable_2d_nll(U, sep.cell_sd, density0, density1, term);
       } else if (term.sepDims.size() == 3) {
-	density::MVNORM_t<Type> density0(sep.corr0);
-	density::MVNORM_t<Type> density1(sep.corr1);
-	density::MVNORM_t<Type> density2(sep.corr2);
+	density::MVNORM_t<Type> density0(sep.margin_corr[0]);
+	density::MVNORM_t<Type> density1(sep.margin_corr[1]);
+	density::MVNORM_t<Type> density2(sep.margin_corr[2]);
 	ans += separable_3d_nll(U, sep.cell_sd, density0, density1,
 				density2, term);
       } else if (term.sepDims.size() == 4) {
-	density::MVNORM_t<Type> density0(sep.corr0);
-	density::MVNORM_t<Type> density1(sep.corr1);
-	density::MVNORM_t<Type> density2(sep.corr2);
-	density::MVNORM_t<Type> density3(sep.corr3);
+	density::MVNORM_t<Type> density0(sep.margin_corr[0]);
+	density::MVNORM_t<Type> density1(sep.margin_corr[1]);
+	density::MVNORM_t<Type> density2(sep.margin_corr[2]);
+	density::MVNORM_t<Type> density3(sep.margin_corr[3]);
 	ans += separable_4d_nll(U, sep.cell_sd, density0, density1,
 				density2, density3, term);
       } else {
