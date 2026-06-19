@@ -455,6 +455,17 @@ struct terms_t : vector<per_term_info<Type> > {
   }
 };
 
+template <class Type>
+Type fill_separable_array(array<Type>& z, array<Type> &U,
+			  const vector<Type>& cell_sd, int g) {
+  Type logscale = 0;
+  for (int k = 0; k < z.size(); k++) {
+    z(k) = U(k, g) / cell_sd(k);
+    logscale += log(cell_sd(k));
+  }
+  return logscale;
+}
+
 template <class Type, class Density0, class Density1>
 Type separable_2d_nll(array<Type> &U, const vector<Type>& cell_sd,
 		      Density0 density0, Density1 density1,
@@ -470,18 +481,54 @@ Type separable_2d_nll(array<Type> &U, const vector<Type>& cell_sd,
 
   for (int g = 0; g < term.blockReps; g++) {
     array<Type> z(dim);
-    Type logscale = 0;
-    // Convert the flat block for group g into an array in product-grid order:
-    //   k = i0 + n0 * i1
-    // Manual scaling keeps all supported scale conventions in one place.
-    for (int i1 = 0; i1 < n1; i1++) {
-      for (int i0 = 0; i0 < n0; i0++) {
-        int k = i0 + n0 * i1;
-        z(i0, i1) = U(k, g) / cell_sd(k);
-        logscale += log(cell_sd(k));
-      }
-    }
+    Type logscale = fill_separable_array(z, U, cell_sd, g);
     ans += density::SEPARABLE(density1, density0)(z) + logscale;
+  }
+  return ans;
+}
+
+template <class Type, class Density0, class Density1, class Density2>
+Type separable_3d_nll(array<Type> &U, const vector<Type>& cell_sd,
+		      Density0 density0, Density1 density1, Density2 density2,
+		      per_term_info<Type>& term) {
+  int n0 = term.sepDims(0);
+  int n1 = term.sepDims(1);
+  int n2 = term.sepDims(2);
+  vector<int> dim(3);
+  dim << n0, n1, n2;
+  Type ans = 0;
+
+  for (int g = 0; g < term.blockReps; g++) {
+    array<Type> z(dim);
+    Type logscale = fill_separable_array(z, U, cell_sd, g);
+    ans += density::SEPARABLE(density2,
+			      density::SEPARABLE(density1, density0))(z) +
+      logscale;
+  }
+  return ans;
+}
+
+template <class Type, class Density0, class Density1, class Density2,
+	  class Density3>
+Type separable_4d_nll(array<Type> &U, const vector<Type>& cell_sd,
+		      Density0 density0, Density1 density1, Density2 density2,
+		      Density3 density3, per_term_info<Type>& term) {
+  int n0 = term.sepDims(0);
+  int n1 = term.sepDims(1);
+  int n2 = term.sepDims(2);
+  int n3 = term.sepDims(3);
+  vector<int> dim(4);
+  dim << n0, n1, n2, n3;
+  Type ans = 0;
+
+  for (int g = 0; g < term.blockReps; g++) {
+    array<Type> z(dim);
+    Type logscale = fill_separable_array(z, U, cell_sd, g);
+    ans += density::SEPARABLE(
+      density3,
+      density::SEPARABLE(density2,
+			 density::SEPARABLE(density1, density0)))(z) +
+      logscale;
   }
   return ans;
 }
@@ -822,6 +869,31 @@ Type eval_separable_2d(array<Type> &U, const vector<Type>& cell_sd,
   return ans;
 }
 
+template <class Type, class Density0, class Density1, class Density2>
+Type eval_separable_3d(array<Type> &U, const vector<Type>& cell_sd,
+		       Density0 density0, Density1 density1, Density2 density2,
+		       const matrix<Type>& corr, per_term_info<Type>& term) {
+  Type ans = separable_3d_nll(U, cell_sd, density0, density1, density2, term);
+  DISABLE_AD {
+    report_separable_dense(cell_sd, corr, term);
+  }
+  return ans;
+}
+
+template <class Type, class Density0, class Density1, class Density2,
+	  class Density3>
+Type eval_separable_4d(array<Type> &U, const vector<Type>& cell_sd,
+		       Density0 density0, Density1 density1, Density2 density2,
+		       Density3 density3, const matrix<Type>& corr,
+		       per_term_info<Type>& term) {
+  Type ans = separable_4d_nll(U, cell_sd, density0, density1, density2,
+			      density3, term);
+  DISABLE_AD {
+    report_separable_dense(cell_sd, corr, term);
+  }
+  return ans;
+}
+
 template <class Type>
 Type eval_separable_dense(array<Type> &U, const vector<Type>& cell_sd,
 			  const matrix<Type>& corr,
@@ -899,6 +971,8 @@ struct sep_corr_corr_pars {
   vector<Type> cell_sd;
   matrix<Type> corr0;
   matrix<Type> corr1;
+  matrix<Type> corr2;
+  matrix<Type> corr3;
   matrix<Type> corr;
 };
 
@@ -948,6 +1022,12 @@ sep_corr_corr_pars<Type> parse_separable_corr_corr(const vector<Type>& theta,
       out.corr = margin.corr;
     } else if (m == 1) {
       out.corr1 = margin.corr;
+      out.corr = kronecker_corr(margin.corr, out.corr);
+    } else if (m == 2) {
+      out.corr2 = margin.corr;
+      out.corr = kronecker_corr(margin.corr, out.corr);
+    } else if (m == 3) {
+      out.corr3 = margin.corr;
       out.corr = kronecker_corr(margin.corr, out.corr);
     } else {
       out.corr = kronecker_corr(margin.corr, out.corr);
@@ -1411,8 +1491,8 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
   else if (term.blockCode == separable_covstruct) {
     // R validates the separable margins and supplies an evaluator code
     // (`sepDispatch`) plus coordinate-order metadata (`sepDensityKinds`,
-    // `sepScaleMode`, `sepScaleSpec`).  Two-margin correlation products use
-    // TMB's SEPARABLE path; longer products currently use a dense fallback.
+    // `sepScaleMode`, `sepScaleSpec`).  Products up to four margins use
+    // nested TMB SEPARABLE calls; longer products use a dense fallback.
     if (do_simulate)
       error("simulation is not yet implemented for separable covariance structures");
 
@@ -1425,6 +1505,19 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
 	density::MVNORM_t<Type> density1(sep.corr1);
 	ans += eval_separable_2d(U, sep.cell_sd, density0, density1,
 				 sep.corr0, sep.corr1, term);
+      } else if (term.sepDims.size() == 3) {
+	density::MVNORM_t<Type> density0(sep.corr0);
+	density::MVNORM_t<Type> density1(sep.corr1);
+	density::MVNORM_t<Type> density2(sep.corr2);
+	ans += eval_separable_3d(U, sep.cell_sd, density0, density1,
+				 density2, sep.corr, term);
+      } else if (term.sepDims.size() == 4) {
+	density::MVNORM_t<Type> density0(sep.corr0);
+	density::MVNORM_t<Type> density1(sep.corr1);
+	density::MVNORM_t<Type> density2(sep.corr2);
+	density::MVNORM_t<Type> density3(sep.corr3);
+	ans += eval_separable_4d(U, sep.cell_sd, density0, density1,
+				 density2, density3, sep.corr, term);
       } else {
 	ans += eval_separable_dense(U, sep.cell_sd, sep.corr, term);
       }
