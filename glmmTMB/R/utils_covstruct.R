@@ -293,7 +293,9 @@ parseNumLevels <- function(levels) {
     toep = 5L
 )
 
-.sep_dispatch_code <- c(dense_ar1 = 1L, dense_dense = 2L)
+.sep_dispatch_code <- c(dense_ar1 = 1L, dense_dense = 2L,
+                        ar1_ar1 = 3L, diag_dense = 4L,
+                        diag_ar1 = 5L, diag_diag = 6L)
 
 .sep_scale_mode_code <- c(
     margin = 1L,          # one margin supplies absolute SDs
@@ -312,6 +314,27 @@ parseNumLevels <- function(levels) {
         dispatch = "dense_ar1",
         density_kinds = c("dense_corr", "ar1"),
         allowed_codes = list(dense_corr = c("cs", "homcs", "us"))
+    ),
+    list(
+        dispatch = "ar1_ar1",
+        density_kinds = c("ar1", "ar1"),
+        allowed_codes = list()
+    ),
+    list(
+        dispatch = "diag_dense",
+        density_kinds = c("diag", "dense_corr"),
+        allowed_codes = list(diag = c("diag", "homdiag"),
+                             dense_corr = c("cs", "homcs", "us"))
+    ),
+    list(
+        dispatch = "diag_ar1",
+        density_kinds = c("diag", "ar1"),
+        allowed_codes = list(diag = c("diag", "homdiag"))
+    ),
+    list(
+        dispatch = "diag_diag",
+        density_kinds = c("diag", "diag"),
+        allowed_codes = list(diag = c("diag", "homdiag"))
     )
 )
 
@@ -437,8 +460,8 @@ parseNumLevels <- function(levels) {
     ## Diagnose scale errors before reporting unsupported density combinations.
     .sep_scale_info(margins, regs, scale)
     stop("separable() frontend parsed ", .sep_margin_label(margins),
-         ", but the backend currently only evaluates cs(), homcs(), or us() ",
-         "crossed with ar1() or another dense-correlation margin.")
+         ", but the backend currently only evaluates two-margin products ",
+         "among diag(), homdiag(), ar1(), cs(), homcs(), and us().")
 }
 
 .sep_restruc_info <- function(spec, cnms, blksize) {

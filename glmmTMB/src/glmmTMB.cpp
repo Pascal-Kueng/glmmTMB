@@ -104,7 +104,8 @@ enum separable_density_kind {
   // structures can share the same separable density kind.  For example, homcs
   // and us are both "dense correlation" margins in the current prototype.
   dense_corr_sep = 1,
-  ar1_sep = 2
+  ar1_sep = 2,
+  diag_sep = 3
 };
 
 enum separable_dispatch {
@@ -112,7 +113,11 @@ enum separable_dispatch {
   // The coordinate order is still carried by sepDensityKinds/sepCodes; dispatch
   // only says which likelihood evaluator is appropriate for the margin pair.
   dense_ar1_dispatch = 1,
-  dense_dense_dispatch = 2
+  dense_dense_dispatch = 2,
+  ar1_ar1_dispatch = 3,
+  diag_dense_dispatch = 4,
+  diag_ar1_dispatch = 5,
+  diag_diag_dispatch = 6
 };
 
 enum separable_scale_mode {
@@ -488,6 +493,10 @@ bool is_dense_corr_margin(int code) {
   return code == cs_covstruct || code == homcs_covstruct || code == us_covstruct;
 }
 
+bool is_diag_margin(int code) {
+  return code == diag_covstruct || code == homdiag_covstruct;
+}
+
 template <class Type>
 matrix<Type> compound_symmetry_corr(int n, Type corr_transf) {
   Type a = Type(1) / (Type(n) - Type(1));
@@ -496,6 +505,14 @@ matrix<Type> compound_symmetry_corr(int n, Type corr_transf) {
   for (int i = 0; i < n; i++)
     for (int j = 0; j < n; j++)
       corr(i, j) = (i == j ? Type(1) : rho);
+  return corr;
+}
+
+template <class Type>
+matrix<Type> identity_corr(int n) {
+  matrix<Type> corr(n, n);
+  corr.setZero();
+  for (int i = 0; i < n; i++) corr(i, i) = Type(1);
   return corr;
 }
 
@@ -527,6 +544,28 @@ void parse_separable_dense_margin(int code, int n, const vector<Type>& theta,
     us_corr_params = theta.segment(theta_pos, n_corr);
     theta_pos += n_corr;
   }
+}
+
+template <class Type>
+void parse_separable_diag_margin(int code, int n, const vector<Type>& theta,
+				 int& theta_pos, bool scale_here,
+				 vector<Type>& margin_sd,
+				 matrix<Type>& corr) {
+  if (!is_diag_margin(code))
+    error("unsupported diagonal margin for separable covariance structure");
+
+  margin_sd.resize(n);
+  margin_sd.fill(Type(1));
+  if (scale_here) {
+    if (code == homdiag_covstruct) {
+      margin_sd.fill(exp(theta(theta_pos++)));
+    } else {
+      vector<Type> logsd = theta.segment(theta_pos, n);
+      theta_pos += n;
+      margin_sd = exp(logsd);
+    }
+  }
+  corr = identity_corr<Type>(n);
 }
 
 template <class Type>
@@ -578,6 +617,13 @@ matrix<Type> ar1_corr(int n, Type phi) {
     for (int j = 0; j < n; j++)
       corr(i, j) = pow(phi, abs(i - j));
   return corr;
+}
+
+template <class Type>
+Type parse_ar1_phi(const vector<Type>& theta, int& theta_pos) {
+  Type corr_transf = theta(theta_pos++);
+  // Same transform used by existing glmmTMB AR1.
+  return corr_transf / sqrt(Type(1) + pow(corr_transf, 2));
 }
 
 template <class Type>
@@ -687,9 +733,7 @@ sep_dense_ar1_pars<Type> parse_separable_dense_ar1(const vector<Type>& theta,
     if (term.sepDensityKinds(m) == ar1_sep) {
       if (scale_here)
 	error("AR1 separable margins cannot carry scale parameters");
-      Type corr_transf = theta(theta_pos++);
-      // Same transform used by existing glmmTMB AR1.
-      out.phi = corr_transf / sqrt(Type(1) + pow(corr_transf, 2));
+      out.phi = parse_ar1_phi(theta, theta_pos);
     } else if (term.sepDensityKinds(m) == dense_corr_sep) {
       vector<Type> margin_sd(n);
       parse_separable_dense_margin(code, n, theta, theta_pos, scale_here,
@@ -701,6 +745,133 @@ sep_dense_ar1_pars<Type> parse_separable_dense_ar1(const vector<Type>& theta,
       error("unsupported dense margin for separable covariance structure");
     }
   }
+  out.cell_sd = separable_cell_sd(global_sd, sd0, sd1);
+  if (theta_pos != theta.size())
+    error("separable covariance theta parsing mismatch");
+
+  return out;
+}
+
+template <class Type>
+struct sep_ar1_ar1_pars {
+  Type phi0;
+  Type phi1;
+  vector<Type> cell_sd;
+};
+
+template <class Type>
+sep_ar1_ar1_pars<Type> parse_separable_ar1_ar1(const vector<Type>& theta,
+					       per_term_info<Type>& term) {
+  sep_ar1_ar1_pars<Type> out;
+  for (int m = 0; m < 2; m++) {
+    if (term.sepDensityKinds(m) != ar1_sep)
+      error("separable covariance currently requires two AR1 margins");
+  }
+  if (term.sepScaleMode(0) != global_sep_scale)
+    error("AR1 x AR1 separable covariance requires scale = global()");
+
+  int theta_pos = 0;
+  Type global_sd = exp(theta(theta_pos++));
+  out.phi0 = parse_ar1_phi(theta, theta_pos);
+  out.phi1 = parse_ar1_phi(theta, theta_pos);
+  vector<Type> sd0(term.sepDims(0));
+  vector<Type> sd1(term.sepDims(1));
+  sd0.fill(Type(1));
+  sd1.fill(Type(1));
+  out.cell_sd = separable_cell_sd(global_sd, sd0, sd1);
+  if (theta_pos != theta.size())
+    error("separable covariance theta parsing mismatch");
+
+  return out;
+}
+
+template <class Type>
+struct sep_diag_ar1_pars {
+  int diag_margin;
+  Type phi;
+  vector<Type> cell_sd;
+  matrix<Type> diag_corr;
+};
+
+template <class Type>
+sep_diag_ar1_pars<Type> parse_separable_diag_ar1(const vector<Type>& theta,
+						 per_term_info<Type>& term) {
+  sep_diag_ar1_pars<Type> out;
+  out.diag_margin = -1;
+  int ar1_margin = -1;
+  Type global_sd = Type(1);
+  vector<Type> sd0(term.sepDims(0));
+  vector<Type> sd1(term.sepDims(1));
+  sd0.fill(Type(1));
+  sd1.fill(Type(1));
+
+  int theta_pos = 0;
+  if (term.sepScaleMode(0) == global_sep_scale)
+    global_sd = exp(theta(theta_pos++));
+
+  for (int m = 0; m < 2; m++) {
+    int code = term.sepCodes(m);
+    int n = term.sepDims(m);
+    bool scale_here = separable_margin_has_scale(term, m);
+
+    if (term.sepDensityKinds(m) == diag_sep) {
+      out.diag_margin = m;
+      vector<Type> margin_sd(n);
+      parse_separable_diag_margin(code, n, theta, theta_pos, scale_here,
+				  margin_sd, out.diag_corr);
+      if (m == 0) sd0 = margin_sd;
+      if (m == 1) sd1 = margin_sd;
+    } else if (term.sepDensityKinds(m) == ar1_sep) {
+      if (scale_here)
+	error("AR1 separable margins cannot carry scale parameters");
+      ar1_margin = m;
+      out.phi = parse_ar1_phi(theta, theta_pos);
+    } else {
+      error("separable covariance currently requires one diagonal margin and one AR1 margin");
+    }
+  }
+  if (out.diag_margin < 0 || ar1_margin < 0 ||
+      out.diag_margin == ar1_margin)
+    error("separable covariance currently requires one diagonal margin and one AR1 margin");
+
+  out.cell_sd = separable_cell_sd(global_sd, sd0, sd1);
+  if (theta_pos != theta.size())
+    error("separable covariance theta parsing mismatch");
+
+  return out;
+}
+
+template <class Type>
+struct sep_diag_diag_pars {
+  vector<Type> cell_sd;
+  matrix<Type> corr0;
+  matrix<Type> corr1;
+};
+
+template <class Type>
+sep_diag_diag_pars<Type> parse_separable_diag_diag(const vector<Type>& theta,
+						   per_term_info<Type>& term) {
+  sep_diag_diag_pars<Type> out;
+  for (int m = 0; m < 2; m++) {
+    if (term.sepDensityKinds(m) != diag_sep)
+      error("separable covariance currently requires two diagonal margins");
+  }
+
+  Type global_sd = Type(1);
+  vector<Type> sd0(term.sepDims(0));
+  vector<Type> sd1(term.sepDims(1));
+  sd0.fill(Type(1));
+  sd1.fill(Type(1));
+
+  int theta_pos = 0;
+  if (term.sepScaleMode(0) == global_sep_scale)
+    global_sd = exp(theta(theta_pos++));
+  parse_separable_diag_margin(term.sepCodes(0), term.sepDims(0), theta,
+			      theta_pos, separable_margin_has_scale(term, 0),
+			      sd0, out.corr0);
+  parse_separable_diag_margin(term.sepCodes(1), term.sepDims(1), theta,
+			      theta_pos, separable_margin_has_scale(term, 1),
+			      sd1, out.corr1);
   out.cell_sd = separable_cell_sd(global_sd, sd0, sd1);
   if (theta_pos != theta.size())
     error("separable covariance theta parsing mismatch");
@@ -749,6 +920,69 @@ sep_dense_dense_pars<Type> parse_separable_dense_dense(const vector<Type>& theta
   parse_separable_dense_margin(out.code1, term.sepDims(1), theta, theta_pos,
 			       separable_margin_has_scale(term, 1),
 			       sd1, out.corr1, out.us_corr_params1);
+  out.cell_sd = separable_cell_sd(global_sd, sd0, sd1);
+  if (theta_pos != theta.size())
+    error("separable covariance theta parsing mismatch");
+
+  return out;
+}
+
+template <class Type>
+struct sep_diag_dense_pars {
+  int diag_margin;
+  int dense_code;
+  vector<Type> cell_sd;
+  matrix<Type> diag_corr;
+  matrix<Type> dense_corr;
+  vector<Type> us_corr_params;
+};
+
+template <class Type>
+sep_diag_dense_pars<Type> parse_separable_diag_dense(const vector<Type>& theta,
+						     per_term_info<Type>& term) {
+  sep_diag_dense_pars<Type> out;
+  out.diag_margin = -1;
+  int dense_margin = -1;
+  out.us_corr_params.resize(0);
+  Type global_sd = Type(1);
+  vector<Type> sd0(term.sepDims(0));
+  vector<Type> sd1(term.sepDims(1));
+  sd0.fill(Type(1));
+  sd1.fill(Type(1));
+
+  int theta_pos = 0;
+  if (term.sepScaleMode(0) == global_sep_scale)
+    global_sd = exp(theta(theta_pos++));
+
+  for (int m = 0; m < 2; m++) {
+    int code = term.sepCodes(m);
+    int n = term.sepDims(m);
+    bool scale_here = separable_margin_has_scale(term, m);
+
+    if (term.sepDensityKinds(m) == diag_sep) {
+      out.diag_margin = m;
+      vector<Type> margin_sd(n);
+      parse_separable_diag_margin(code, n, theta, theta_pos, scale_here,
+				  margin_sd, out.diag_corr);
+      if (m == 0) sd0 = margin_sd;
+      if (m == 1) sd1 = margin_sd;
+    } else if (term.sepDensityKinds(m) == dense_corr_sep) {
+      dense_margin = m;
+      out.dense_code = code;
+      vector<Type> margin_sd(n);
+      parse_separable_dense_margin(code, n, theta, theta_pos, scale_here,
+				   margin_sd, out.dense_corr,
+				   out.us_corr_params);
+      if (m == 0) sd0 = margin_sd;
+      if (m == 1) sd1 = margin_sd;
+    } else {
+      error("separable covariance currently requires one diagonal margin and one dense margin");
+    }
+  }
+  if (out.diag_margin < 0 || dense_margin < 0 ||
+      out.diag_margin == dense_margin)
+    error("separable covariance currently requires one diagonal margin and one dense margin");
+
   out.cell_sd = separable_cell_sd(global_sd, sd0, sd1);
   if (theta_pos != theta.size())
     error("separable covariance theta parsing mismatch");
@@ -1251,6 +1485,61 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
 	ans += eval_separable_2d(U, sep.cell_sd, density0, density1,
 				 sep.corr0, sep.corr1, term);
       }
+      break;
+    }
+    case ar1_ar1_dispatch: {
+      sep_ar1_ar1_pars<Type> sep = parse_separable_ar1_ar1(theta, term);
+      ans += eval_separable_2d(U, sep.cell_sd,
+			       density::AR1(sep.phi0), density::AR1(sep.phi1),
+			       ar1_corr(term.sepDims(0), sep.phi0),
+			       ar1_corr(term.sepDims(1), sep.phi1), term);
+      break;
+    }
+    case diag_dense_dispatch: {
+      sep_diag_dense_pars<Type> sep = parse_separable_diag_dense(theta, term);
+      density::MVNORM_t<Type> diag_density(sep.diag_corr);
+      if (sep.dense_code == us_covstruct) {
+	density::UNSTRUCTURED_CORR_t<Type> dense_density(sep.us_corr_params);
+	if (sep.diag_margin == 0) {
+	  ans += eval_separable_2d(U, sep.cell_sd, diag_density, dense_density,
+				   sep.diag_corr, dense_density.cov(), term);
+	} else {
+	  ans += eval_separable_2d(U, sep.cell_sd, dense_density, diag_density,
+				   dense_density.cov(), sep.diag_corr, term);
+	}
+      } else {
+	density::MVNORM_t<Type> dense_density(sep.dense_corr);
+	if (sep.diag_margin == 0) {
+	  ans += eval_separable_2d(U, sep.cell_sd, diag_density, dense_density,
+				   sep.diag_corr, sep.dense_corr, term);
+	} else {
+	  ans += eval_separable_2d(U, sep.cell_sd, dense_density, diag_density,
+				   sep.dense_corr, sep.diag_corr, term);
+	}
+      }
+      break;
+    }
+    case diag_ar1_dispatch: {
+      sep_diag_ar1_pars<Type> sep = parse_separable_diag_ar1(theta, term);
+      density::MVNORM_t<Type> diag_density(sep.diag_corr);
+      if (sep.diag_margin == 0) {
+	ans += eval_separable_2d(U, sep.cell_sd, diag_density,
+				 density::AR1(sep.phi), sep.diag_corr,
+				 ar1_corr(term.sepDims(1), sep.phi), term);
+      } else {
+	ans += eval_separable_2d(U, sep.cell_sd, density::AR1(sep.phi),
+				 diag_density,
+				 ar1_corr(term.sepDims(0), sep.phi),
+				 sep.diag_corr, term);
+      }
+      break;
+    }
+    case diag_diag_dispatch: {
+      sep_diag_diag_pars<Type> sep = parse_separable_diag_diag(theta, term);
+      density::MVNORM_t<Type> density0(sep.corr0);
+      density::MVNORM_t<Type> density1(sep.corr1);
+      ans += eval_separable_2d(U, sep.cell_sd, density0, density1,
+			       sep.corr0, sep.corr1, term);
       break;
     }
     default:

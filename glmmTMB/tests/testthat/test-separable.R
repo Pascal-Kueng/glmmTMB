@@ -205,6 +205,23 @@ make_dense_margin <- function(struc = c("cs", "homcs", "us"), n = 2,
     )
 }
 
+make_diag_margin <- function(struc = c("diag", "homdiag"), n = 2,
+                             sd = seq(0.7, 1.1, length.out = n)) {
+    struc <- match.arg(struc)
+    list(
+        struc = struc,
+        sd = if (struc == "homdiag") sd[[1]] else sd,
+        R = diag(n),
+        scale_theta = log(if (struc == "homdiag") sd[[1]] else sd),
+        corr_theta = numeric()
+    )
+}
+
+margin_call <- function(struc, var) {
+    as.call(list(as.name(struc),
+                 as.call(list(as.name("+"), 0, as.name(var)))))
+}
+
 make_sep_dense_dense_case <- function(struc0 = c("cs", "homcs", "us"),
                                       struc1 = c("cs", "homcs", "us"),
                                       scale_mode = c("global", "product",
@@ -224,10 +241,6 @@ make_sep_dense_dense_case <- function(struc0 = c("cs", "homcs", "us"),
                       group = factor(seq_len(2)))
     dd$y <- 0
 
-    margin_call <- function(struc, var) {
-        as.call(list(as.name(struc),
-                     as.call(list(as.name("+"), 0, as.name(var)))))
-    }
     call0 <- margin_call(struc0, "member")
     call1 <- margin_call(struc1, "item")
     scale_call <- switch(scale_mode,
@@ -291,6 +304,268 @@ make_sep_dense_dense_case <- function(struc0 = c("cs", "homcs", "us"),
          scale_spec = switch(scale_mode,
              global = integer(), product = c(0L, 1L),
              selected_first = 0L, selected_second = 1L))
+}
+
+make_sep_ar1_ar1_case <- function(n0 = 3, n1 = 4, phi0 = 0.35, phi1 = 0.55) {
+    global_sd <- 1.25
+    dd <- expand.grid(time0 = factor(seq_len(n0)),
+                      time1 = factor(seq_len(n1)),
+                      group = factor(seq_len(2)))
+    dd$y <- 0
+    form <- y ~ 1 +
+        separable(ar1(0 + time0) %x% ar1(0 + time1) | group,
+                  scale = global())
+    R0 <- outer(seq_len(n0), seq_len(n0), function(i, j) phi0^abs(i - j))
+    R1 <- outer(seq_len(n1), seq_len(n1), function(i, j) phi1^abs(i - j))
+    R_full <- kronecker(R1, R0)
+    sd_full <- rep(global_sd, n0 * n1)
+
+    list(form = form,
+         dense_form = y ~ 1 + us(sepgrid(time0, time1) + 0 | group),
+         dd = dd,
+         theta = c(log(global_sd), ar1_to_theta(phi0), ar1_to_theta(phi1)),
+         theta_dense = c(log(sd_full), put_cor(R_full)),
+         R_full = R_full,
+         sd_full = sd_full,
+         codes = unname(c(.valid_covstruct[["ar1"]],
+                          .valid_covstruct[["ar1"]])),
+         kinds = c(2L, 2L),
+         dispatch = 3L,
+         scale_mode = 2L,
+         scale_spec = integer())
+}
+
+make_sep_diag_ar1_case <- function(struc = c("diag", "homdiag"),
+                                   reversed = FALSE,
+                                   scale_mode = c("margin", "global",
+                                                  "product", "selected"),
+                                   n_diag = 3, n_time = 4, phi = 0.45) {
+    struc <- match.arg(struc)
+    scale_mode <- match.arg(scale_mode)
+    m <- make_diag_margin(struc, n_diag)
+    global_sd <- 1.2
+    dd <- expand.grid(member = factor(paste0("m", seq_len(n_diag))),
+                      time = factor(seq_len(n_time)),
+                      group = factor(seq_len(2)))
+    dd$y <- 0
+
+    diag_call <- margin_call(struc, "member")
+    ar1_call <- quote(ar1(0 + time))
+    scale_call <- switch(scale_mode,
+        margin = NULL,
+        global = quote(global()),
+        product = quote(product()),
+        selected = as.call(list(as.name("product"), diag_call))
+    )
+    lhs <- if (reversed) as.call(list(as.name("%x%"), ar1_call, diag_call))
+           else as.call(list(as.name("%x%"), diag_call, ar1_call))
+    sep_call <- as.call(c(list(as.name("separable"),
+                               as.call(list(as.name("|"), lhs, quote(group)))),
+                          if (is.null(scale_call)) list()
+                          else list(scale = scale_call)))
+    form <- as.formula(as.call(list(quote(`~`), quote(y),
+        as.call(list(quote(`+`), 1, sep_call)))))
+
+    R_time <- outer(seq_len(n_time), seq_len(n_time),
+                    function(i, j) phi^abs(i - j))
+    sd_diag <- if (length(m$sd) == 1L) rep(m$sd, n_diag) else m$sd
+    theta_diag <- if (scale_mode == "global") numeric() else m$scale_theta
+    theta <- if (reversed) {
+        c(if (scale_mode == "global") log(global_sd),
+          ar1_to_theta(phi), theta_diag)
+    } else {
+        c(if (scale_mode == "global") log(global_sd),
+          theta_diag, ar1_to_theta(phi))
+    }
+    sd_full <- if (scale_mode == "global") {
+        rep(global_sd, n_diag * n_time)
+    } else if (reversed) {
+        rep(sd_diag, each = n_time)
+    } else {
+        rep(sd_diag, n_time)
+    }
+    R_full <- if (reversed) kronecker(m$R, R_time)
+              else kronecker(R_time, m$R)
+
+    list(form = form,
+         dense_form = if (reversed) y ~ 1 + us(sepgrid(time, member) + 0 | group)
+                      else y ~ 1 + us(sepgrid(member, time) + 0 | group),
+         dd = dd,
+         theta = theta,
+         theta_dense = c(log(sd_full), put_cor(R_full)),
+         R_full = R_full,
+         sd_full = sd_full,
+         codes = if (reversed) unname(c(.valid_covstruct[["ar1"]],
+                                        .valid_covstruct[[struc]]))
+                 else unname(c(.valid_covstruct[[struc]],
+                               .valid_covstruct[["ar1"]])),
+         kinds = if (reversed) c(2L, 3L) else c(3L, 2L),
+         dispatch = 5L,
+         scale_mode = switch(scale_mode,
+             margin = 1L, global = 2L, product = 3L, selected = 4L),
+         scale_spec = if (scale_mode == "global") integer()
+                      else if (reversed) 1L else 0L)
+}
+
+make_sep_diag_dense_case <- function(diag_struc = c("diag", "homdiag"),
+                                     dense_struc = c("cs", "homcs", "us"),
+                                     reversed = FALSE,
+                                     scale_mode = c("global", "product",
+                                                    "selected_diag",
+                                                    "selected_dense"),
+                                     n_diag = 3, n_dense = 3) {
+    diag_struc <- match.arg(diag_struc)
+    dense_struc <- match.arg(dense_struc)
+    scale_mode <- match.arg(scale_mode)
+    d <- make_diag_margin(diag_struc, n_diag)
+    m <- make_dense_margin(dense_struc, n_dense, rho = 0.25)
+    global_sd <- 1.15
+    dd <- expand.grid(member = factor(paste0("m", seq_len(n_diag))),
+                      item = factor(paste0("i", seq_len(n_dense))),
+                      group = factor(seq_len(2)))
+    dd$y <- 0
+
+    diag_call <- margin_call(diag_struc, "member")
+    dense_call <- margin_call(dense_struc, "item")
+    scale_call <- switch(scale_mode,
+        global = quote(global()),
+        product = quote(product()),
+        selected_diag = as.call(list(as.name("product"), diag_call)),
+        selected_dense = as.call(list(as.name("product"), dense_call))
+    )
+    lhs <- if (reversed) as.call(list(as.name("%x%"), dense_call, diag_call))
+           else as.call(list(as.name("%x%"), diag_call, dense_call))
+    sep_call <- as.call(list(
+        as.name("separable"),
+        as.call(list(as.name("|"), lhs, quote(group))),
+        scale = scale_call
+    ))
+    form <- as.formula(as.call(list(quote(`~`), quote(y),
+        as.call(list(quote(`+`), 1, sep_call)))))
+
+    theta_diag <- switch(scale_mode,
+        global = numeric(),
+        product = d$scale_theta,
+        selected_diag = d$scale_theta,
+        selected_dense = numeric()
+    )
+    theta_dense <- switch(scale_mode,
+        global = m$corr_theta,
+        product = c(m$scale_theta, m$corr_theta),
+        selected_diag = m$corr_theta,
+        selected_dense = c(m$scale_theta, m$corr_theta)
+    )
+    theta <- if (reversed) {
+        c(if (scale_mode == "global") log(global_sd), theta_dense, theta_diag)
+    } else {
+        c(if (scale_mode == "global") log(global_sd), theta_diag, theta_dense)
+    }
+
+    sd_diag <- if (length(d$sd) == 1L) rep(d$sd, n_diag) else d$sd
+    sd_dense <- if (length(m$sd) == 1L) rep(m$sd, n_dense) else m$sd
+    sd_full <- switch(scale_mode,
+        global = rep(global_sd, n_diag * n_dense),
+        product = if (reversed) as.vector(outer(sd_dense, sd_diag))
+                  else as.vector(outer(sd_diag, sd_dense)),
+        selected_diag = if (reversed) rep(sd_diag, each = n_dense)
+                        else rep(sd_diag, n_dense),
+        selected_dense = if (reversed) rep(sd_dense, n_diag)
+                         else rep(sd_dense, each = n_diag)
+    )
+    R_full <- if (reversed) kronecker(d$R, m$R) else kronecker(m$R, d$R)
+
+    list(form = form,
+         dense_form = if (reversed) y ~ 1 + us(sepgrid(item, member) + 0 | group)
+                      else y ~ 1 + us(sepgrid(member, item) + 0 | group),
+         dd = dd,
+         theta = theta,
+         theta_dense = c(log(sd_full), put_cor(R_full)),
+         R_full = R_full,
+         sd_full = sd_full,
+         codes = if (reversed) unname(c(.valid_covstruct[[dense_struc]],
+                                        .valid_covstruct[[diag_struc]]))
+                 else unname(c(.valid_covstruct[[diag_struc]],
+                               .valid_covstruct[[dense_struc]])),
+         kinds = if (reversed) c(1L, 3L) else c(3L, 1L),
+         dispatch = 4L,
+         scale_mode = switch(scale_mode,
+             global = 2L, product = 3L,
+             selected_diag = 4L, selected_dense = 4L),
+         scale_spec = switch(scale_mode,
+             global = integer(),
+             product = c(0L, 1L),
+             selected_diag = if (reversed) 1L else 0L,
+             selected_dense = if (reversed) 0L else 1L))
+}
+
+make_sep_diag_diag_case <- function(struc0 = c("diag", "homdiag"),
+                                    struc1 = c("diag", "homdiag"),
+                                    scale_mode = c("global", "product",
+                                                   "selected_first"),
+                                    n0 = 2, n1 = 3) {
+    struc0 <- match.arg(struc0)
+    struc1 <- match.arg(struc1)
+    scale_mode <- match.arg(scale_mode)
+    m0 <- make_diag_margin(struc0, n0)
+    m1 <- make_diag_margin(struc1, n1, sd = seq(1.1, 1.4, length.out = n1))
+    global_sd <- 1.3
+    dd <- expand.grid(member = factor(paste0("m", seq_len(n0))),
+                      item = factor(paste0("i", seq_len(n1))),
+                      group = factor(seq_len(2)))
+    dd$y <- 0
+
+    call0 <- margin_call(struc0, "member")
+    call1 <- margin_call(struc1, "item")
+    scale_call <- switch(scale_mode,
+        global = quote(global()),
+        product = quote(product()),
+        selected_first = as.call(list(as.name("product"), call0))
+    )
+    sep_call <- as.call(list(
+        as.name("separable"),
+        as.call(list(as.name("|"),
+                     as.call(list(as.name("%x%"), call0, call1)),
+                     quote(group))),
+        scale = scale_call
+    ))
+    form <- as.formula(as.call(list(quote(`~`), quote(y),
+        as.call(list(quote(`+`), 1, sep_call)))))
+
+    theta0 <- switch(scale_mode,
+        global = numeric(),
+        product = m0$scale_theta,
+        selected_first = m0$scale_theta
+    )
+    theta1 <- switch(scale_mode,
+        global = numeric(),
+        product = m1$scale_theta,
+        selected_first = numeric()
+    )
+    theta <- c(if (scale_mode == "global") log(global_sd), theta0, theta1)
+    sd0 <- if (length(m0$sd) == 1L) rep(m0$sd, n0) else m0$sd
+    sd1 <- if (length(m1$sd) == 1L) rep(m1$sd, n1) else m1$sd
+    sd_full <- switch(scale_mode,
+        global = rep(global_sd, n0 * n1),
+        product = as.vector(outer(sd0, sd1)),
+        selected_first = rep(sd0, n1)
+    )
+    R_full <- diag(n0 * n1)
+
+    list(form = form,
+         dense_form = y ~ 1 + us(sepgrid(member, item) + 0 | group),
+         dd = dd,
+         theta = theta,
+         theta_dense = c(log(sd_full), put_cor(R_full)),
+         R_full = R_full,
+         sd_full = sd_full,
+         codes = unname(c(.valid_covstruct[[struc0]],
+                          .valid_covstruct[[struc1]])),
+         kinds = c(3L, 3L),
+         dispatch = 6L,
+         scale_mode = switch(scale_mode,
+             global = 2L, product = 3L, selected_first = 4L),
+         scale_spec = switch(scale_mode,
+             global = integer(), product = c(0L, 1L), selected_first = 0L))
 }
 
 test_that("sepgrid builds complete two-dimensional levels", {
@@ -608,13 +883,6 @@ test_that("separable rejects unsupported margins", {
     expect_error(
         glmmTMB(y ~ 1 +
                     separable(ar1(0 + member) %x% ar1(0 + time) | group,
-                              scale = global()),
-                data = dd, doFit = FALSE),
-        "backend currently only evaluates"
-    )
-    expect_error(
-        glmmTMB(y ~ 1 +
-                    separable(ar1(0 + member) %x% ar1(0 + time) | group,
                               scale = product()),
                 data = dd, doFit = FALSE),
         "needs at least one scale-capable margin"
@@ -679,6 +947,43 @@ test_that("separable likelihood matches dense MVN for supported dense x dense pa
         make_sep_dense_dense_case("us", "homcs", scale_mode = "selected_first"),
         make_sep_dense_dense_case("cs", "us", scale_mode = "selected_second"),
         make_sep_dense_dense_case("us", "us", scale_mode = "product")
+    )
+    invisible(lapply(cases, expect_separable_case_nll))
+})
+
+test_that("separable reports kronecker covariance for ar1 x ar1", {
+    expect_separable_case_vc(make_sep_ar1_ar1_case())
+})
+
+test_that("separable likelihood matches dense MVN for ar1 x ar1", {
+    expect_separable_case_nll(make_sep_ar1_ar1_case())
+})
+
+test_that("separable reports kronecker covariance for diagonal margin pairs", {
+    cases <- list(
+        make_sep_diag_ar1_case("diag"),
+        make_sep_diag_ar1_case("homdiag", reversed = TRUE,
+                               scale_mode = "product"),
+        make_sep_diag_dense_case("diag", "us", scale_mode = "product"),
+        make_sep_diag_dense_case("homdiag", "cs", reversed = TRUE,
+                                 scale_mode = "selected_diag"),
+        make_sep_diag_diag_case("diag", "homdiag", scale_mode = "product"),
+        make_sep_diag_diag_case("homdiag", "diag", scale_mode = "global")
+    )
+    invisible(lapply(cases, expect_separable_case_vc))
+})
+
+test_that("separable likelihood matches dense MVN for diagonal margin pairs", {
+    cases <- list(
+        make_sep_diag_ar1_case("diag"),
+        make_sep_diag_ar1_case("homdiag", reversed = TRUE,
+                               scale_mode = "selected"),
+        make_sep_diag_dense_case("diag", "us", scale_mode = "product"),
+        make_sep_diag_dense_case("homdiag", "homcs",
+                                 scale_mode = "selected_dense"),
+        make_sep_diag_diag_case("diag", "homdiag", scale_mode = "product"),
+        make_sep_diag_diag_case("homdiag", "diag",
+                                scale_mode = "selected_first")
     )
     invisible(lapply(cases, expect_separable_case_nll))
 })
