@@ -375,7 +375,7 @@ struct per_term_info {
   //   3 = diagonal correlation margin (currently diag or homdiag)
   //   4 = spatial correlation margin (currently ou, exp, gau, or mat)
   //   5 = Toeplitz correlation margin (currently toep or homtoep)
-  //   6 = fixed covariance margin (currently propto or equalto)
+  //   6 = fixed covariance margin
   //
   // `sepDispatch` selects the C++ evaluator.  The current backend uses one
   // evaluator for any margin product that can be represented by correlation
@@ -613,10 +613,6 @@ bool is_toep_margin(int code) {
 bool is_spatial_margin(int code) {
   return code == ou_covstruct || code == exp_covstruct ||
     code == gau_covstruct || code == mat_covstruct;
-}
-
-bool is_fixed_cov_margin(int code) {
-  return code == propto_covstruct || code == equalto_covstruct;
 }
 
 template <class Type>
@@ -882,9 +878,6 @@ void parse_separable_fixed_cov_margin(const sep_margin_spec& margin,
 				      const matrix<Type>& cov,
 				      vector<Type>& margin_sd,
 				      matrix<Type>& corr) {
-  if (!is_fixed_cov_margin(margin.code))
-    error("unsupported fixed covariance margin for separable covariance structure");
-
   margin_sd.resize(margin.n);
   corr.resize(margin.n, margin.n);
   vector<Type> extra_sd(margin.n);
