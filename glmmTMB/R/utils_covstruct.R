@@ -356,7 +356,8 @@ parseNumLevels <- function(levels) {
 
 .sep_margin_entry <- function(code, builder, scale, theta,
                               metadata = .sep_metadata(),
-                              extra = .sep_extra()) {
+                              extra = .sep_extra(),
+                              validate_payload = NULL) {
     if (is.null(scale$kind) || !is.function(scale$n) ||
         is.null(scale$can_scale) || is.null(scale$can_auto_scale) ||
         is.null(scale$fixed_scale)) {
@@ -372,6 +373,9 @@ parseNumLevels <- function(levels) {
         is.null(extra$payloads)) {
         stop("Malformed separable() extra-argument contract for ", code)
     }
+    if (!is.null(validate_payload) && !is.function(validate_payload)) {
+        stop("Malformed separable() payload validator for ", code)
+    }
     if (!scale$kind %in% c("none", "homogeneous", "heterogeneous")) {
         stop("Unknown separable() scale kind for ", code, ": ", scale$kind)
     }
@@ -381,7 +385,8 @@ parseNumLevels <- function(levels) {
         scale = scale,
         theta = theta,
         metadata = metadata,
-        extra = extra
+        extra = extra,
+        validate_payload = validate_payload
     )
 }
 
@@ -389,6 +394,30 @@ parseNumLevels <- function(levels) {
     n = 1L,
     payloads = .sep_payload("cov_matrix", 1L)
 )
+
+.sep_validate_propto_payload <- function(payload, value, cnms, expr, env) {
+    if (!identical(payload$kind, "cov_matrix")) return(value)
+    mat_names <- colnames(value)
+    if (is.null(mat_names)) mat_names <- rownames(value)
+    if (is.null(mat_names)) {
+        stop("row or column names of propto matrix are required",
+             call. = FALSE)
+    }
+    if (!is.null(rownames(value)) && !identical(rownames(value), mat_names)) {
+        stop("row and column names of propto matrix do not match",
+             call. = FALSE)
+    }
+    if (!identical(mat_names, cnms)) {
+        labs <- attr(stats::terms(.sep_margin_formula(expr, env)),
+                     "term.labels")
+        prefixed <- paste0(labs, mat_names)
+        if (!identical(prefixed, cnms)) {
+            stop("column or row names of the propto matrix do not match ",
+                 "the separable() margin columns.", call. = FALSE)
+        }
+    }
+    value
+}
 
 .sep_margin_registry <- list(
     diag = .sep_margin_entry("diag", "diag",
@@ -437,7 +466,8 @@ parseNumLevels <- function(levels) {
     propto = .sep_margin_entry("propto", "fixed_cov",
                                .sep_scale("homogeneous", 1L),
                                .sep_theta(),
-                               extra = .sep_cov_matrix_extra),
+                               extra = .sep_cov_matrix_extra,
+                               validate_payload = .sep_validate_propto_payload),
     equalto = .sep_margin_entry("equalto", "fixed_cov",
                                 .sep_scale("none", fixed = TRUE),
                                 .sep_theta(),
@@ -871,7 +901,7 @@ parseNumLevels <- function(levels) {
              })
 }
 
-.sep_check_cov_payload <- function(x, cnms, expr, struc, env) {
+.sep_check_cov_payload <- function(x, cnms, struc) {
     if (!is.matrix(x) || !is.numeric(x)) {
         stop("separable() ", struc, "() margin expects a numeric matrix ",
              "extra argument.", call. = FALSE)
@@ -885,34 +915,12 @@ parseNumLevels <- function(levels) {
              "dimension ", nrow(x), ", but the margin has ", length(cnms),
              " columns.", call. = FALSE)
     }
-    if (identical(struc, "propto")) {
-        rn <- rownames(x)
-        cn <- colnames(x)
-        if (is.null(rn) && is.null(cn)) {
-            stop("row or column names of propto matrix are required",
-                 call. = FALSE)
-        }
-        if (!is.null(rn) && !is.null(cn) && !identical(rn, cn)) {
-            stop("row and column names of propto matrix do not match",
-                 call. = FALSE)
-        }
-        mat_names <- if (is.null(cn)) rn else cn
-        if (!identical(mat_names, cnms)) {
-            labs <- attr(stats::terms(.sep_margin_formula(expr, env)),
-                         "term.labels")
-            prefixed <- paste0(labs, mat_names)
-            if (!identical(prefixed, cnms)) {
-                stop("column or row names of the propto matrix do not match ",
-                     "the separable() margin columns.", call. = FALSE)
-            }
-        }
-    }
     x
 }
 
-.sep_check_payload <- function(payload, value, cnms, expr, struc, env) {
+.sep_check_payload <- function(payload, value, cnms, struc) {
     switch(payload$kind,
-           cov_matrix = .sep_check_cov_payload(value, cnms, expr, struc, env),
+           cov_matrix = .sep_check_cov_payload(value, cnms, struc),
            stop("Unsupported separable() payload kind: ", payload$kind,
                 call. = FALSE))
 }
@@ -923,10 +931,15 @@ parseNumLevels <- function(levels) {
         reg <- .sep_margin_registry[[margins$struc[i]]]
         specs <- reg$extra$payloads
         if (!length(specs)) next
+        cnms <- colnames(Xlist[[i]])
         payloads[[i]] <- setNames(lapply(specs, function(payload) {
             value <- .sep_eval_extra(margins$extra[[i]][[payload$arg]], fr, env)
-            .sep_check_payload(payload, value, colnames(Xlist[[i]]),
-                               margins$expr[[i]], margins$struc[i], env)
+            value <- .sep_check_payload(payload, value, cnms, margins$struc[i])
+            if (is.function(reg$validate_payload)) {
+                value <- reg$validate_payload(payload, value, cnms,
+                                              margins$expr[[i]], env)
+            }
+            value
         }), vapply(specs, `[[`, character(1), "kind"))
     }
     payloads
