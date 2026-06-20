@@ -537,45 +537,47 @@ Type fill_separable_array(array<Type>& z, array<Type> &U,
 }
 
 template <class Type>
-vector<int> separable_array_dim(per_term_info<Type>& term, int n) {
-  vector<int> dim(n);
-  for (int i = 0; i < n; i++) dim(i) = term.sepDims(i);
+vector<int> separable_array_dim(per_term_info<Type>& term) {
+  vector<int> dim(term.sepDims.size());
+  for (int i = 0; i < term.sepDims.size(); i++) dim(i) = term.sepDims(i);
   return dim;
+}
+
+template <class Type, class Density>
+Type separable_density_nll(array<Type> &U, const vector<Type>& cell_sd,
+			   Density density, per_term_info<Type>& term) {
+  // Evaluate a separable block without forming the full Kronecker covariance
+  // matrix. The density object is built with SEPARABLE arguments in reverse
+  // array-dimension order.
+  vector<int> dim = separable_array_dim(term);
+  Type ans = 0;
+
+  for (int g = 0; g < term.blockReps; g++) {
+    array<Type> z(dim);
+    Type logscale = fill_separable_array(z, U, cell_sd, g);
+    ans += density(z) + logscale;
+  }
+  return ans;
 }
 
 template <class Type, class Density0, class Density1>
 Type separable_2d_nll(array<Type> &U, const vector<Type>& cell_sd,
 		      Density0 density0, Density1 density1,
 		      per_term_info<Type>& term) {
-  // Evaluate a two-margin separable block without forming the full Kronecker
-  // covariance matrix. TMB's SEPARABLE arguments are supplied in reverse
-  // array-dimension order.
-  vector<int> dim = separable_array_dim(term, 2);
-  Type ans = 0;
-
-  for (int g = 0; g < term.blockReps; g++) {
-    array<Type> z(dim);
-    Type logscale = fill_separable_array(z, U, cell_sd, g);
-    ans += density::SEPARABLE(density1, density0)(z) + logscale;
-  }
-  return ans;
+  return separable_density_nll(U, cell_sd,
+			       density::SEPARABLE(density1, density0),
+			       term);
 }
 
 template <class Type, class Density0, class Density1, class Density2>
 Type separable_3d_nll(array<Type> &U, const vector<Type>& cell_sd,
 		      Density0 density0, Density1 density1, Density2 density2,
 		      per_term_info<Type>& term) {
-  vector<int> dim = separable_array_dim(term, 3);
-  Type ans = 0;
-
-  for (int g = 0; g < term.blockReps; g++) {
-    array<Type> z(dim);
-    Type logscale = fill_separable_array(z, U, cell_sd, g);
-    ans += density::SEPARABLE(density2,
-			      density::SEPARABLE(density1, density0))(z) +
-      logscale;
-  }
-  return ans;
+  return separable_density_nll(
+    U, cell_sd,
+    density::SEPARABLE(density2,
+		       density::SEPARABLE(density1, density0)),
+    term);
 }
 
 template <class Type, class Density0, class Density1, class Density2,
@@ -583,19 +585,30 @@ template <class Type, class Density0, class Density1, class Density2,
 Type separable_4d_nll(array<Type> &U, const vector<Type>& cell_sd,
 		      Density0 density0, Density1 density1, Density2 density2,
 		      Density3 density3, per_term_info<Type>& term) {
-  vector<int> dim = separable_array_dim(term, 4);
-  Type ans = 0;
-
-  for (int g = 0; g < term.blockReps; g++) {
-    array<Type> z(dim);
-    Type logscale = fill_separable_array(z, U, cell_sd, g);
-    ans += density::SEPARABLE(
+  return separable_density_nll(
+    U, cell_sd,
+    density::SEPARABLE(
       density3,
       density::SEPARABLE(density2,
-			 density::SEPARABLE(density1, density0)))(z) +
-      logscale;
-  }
-  return ans;
+			 density::SEPARABLE(density1, density0))),
+    term);
+}
+
+template <class Type, class Density0, class Density1, class Density2,
+	  class Density3, class Density4>
+Type separable_5d_nll(array<Type> &U, const vector<Type>& cell_sd,
+		      Density0 density0, Density1 density1, Density2 density2,
+		      Density3 density3, Density4 density4,
+		      per_term_info<Type>& term) {
+  return separable_density_nll(
+    U, cell_sd,
+    density::SEPARABLE(
+      density4,
+      density::SEPARABLE(
+	density3,
+	density::SEPARABLE(density2,
+			   density::SEPARABLE(density1, density0)))),
+    term);
 }
 
 bool is_dense_corr_margin(int code) {
@@ -1605,7 +1618,7 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
   else if (term.blockCode == separable_covstruct) {
     // R validates the separable margins and supplies an evaluator code
     // (`sepDispatch`) plus coordinate-order metadata (`sepBuilderKinds`,
-    // `sepScaleKinds`, `sepScaleMode`, `sepScaleSpec`). Products up to four
+    // `sepScaleKinds`, `sepScaleMode`, `sepScaleSpec`). Products up to five
     // margins use nested TMB SEPARABLE calls; longer products use a dense
     // fallback.
     check_separable_metadata(term);
@@ -1629,6 +1642,14 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
 	density::MVNORM_t<Type> density3(sep.margin_corr[3]);
 	ans += separable_4d_nll(U, sep.cell_sd, density0, density1,
 				density2, density3, term);
+      } else if (term.sepDims.size() == 5) {
+	density::MVNORM_t<Type> density0(sep.margin_corr[0]);
+	density::MVNORM_t<Type> density1(sep.margin_corr[1]);
+	density::MVNORM_t<Type> density2(sep.margin_corr[2]);
+	density::MVNORM_t<Type> density3(sep.margin_corr[3]);
+	density::MVNORM_t<Type> density4(sep.margin_corr[4]);
+	ans += separable_5d_nll(U, sep.cell_sd, density0, density1,
+				density2, density3, density4, term);
       } else {
 	ans += separable_dense_nll(U, sep.cell_sd, sep.corr, term);
       }

@@ -1401,7 +1401,7 @@ test_that("separable supports Toeplitz correlation margins", {
     invisible(lapply(cases, expect_separable_case_nll))
 })
 
-test_that("separable supports three and four correlation-matrix margins", {
+test_that("separable supports three to five correlation-matrix margins", {
     cases <- list(
         make_sep_margin_chain_case(
             list(make_dense_margin("us", n = 2),
@@ -1433,6 +1433,15 @@ test_that("separable supports three and four correlation-matrix margins", {
             vars = c("member", "item", "time", "occasion"),
             scale_mode = "selected_product",
             scale_index = 2L
+        ),
+        make_sep_margin_chain_case(
+            list(make_dense_margin("homcs", n = 2),
+                 make_diag_margin("homdiag", n = 2),
+                 make_ar1_margin("ar1", n = 2),
+                 make_toep_margin("homtoep", n = 2),
+                 make_dense_margin("cs", n = 2)),
+            vars = c("member", "item", "time", "occasion", "rater"),
+            scale_mode = "global"
         )
     )
     invisible(lapply(cases, expect_separable_case_vc))
