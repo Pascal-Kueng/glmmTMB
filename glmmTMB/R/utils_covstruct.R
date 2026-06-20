@@ -156,12 +156,20 @@ parseNumLevels <- function(levels) {
     .sep_specs_from_split(ss)
 }
 
+.sep_margin_extra_varnames <- function(margins) {
+    unlist(Map(function(struc, extra) {
+        frame_args <- .sep_margin_registry[[struc]]$extra$frame_args
+        unlist(lapply(extra[frame_args], all.vars), use.names = FALSE)
+    }, margins$struc, margins$extra), use.names = FALSE)
+}
+
 .sep_margin_varnames <- function(..., include_group = FALSE) {
     forms <- list(...)
     vars <- unlist(lapply(forms, function(f) {
         specs <- .sep_formula_specs(f)
         unlist(lapply(specs, function(spec) {
             ans <- unlist(lapply(spec$margins$expr, all.vars), use.names = FALSE)
+            ans <- c(ans, .sep_margin_extra_varnames(spec$margins))
             if (include_group) ans <- c(ans, all.vars(spec$group))
             unique(ans)
         }), use.names = FALSE)
@@ -182,12 +190,14 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_product_margin_spec <- function(x) {
-    if (!is.call(x) || length(x) != 2L)
+    if (!is.call(x) || length(x) < 2L)
         stop("separable() product margins must look like us(0 + role) ",
              "or ar1(0 + day).")
+    args <- as.list(x[-1])
     data.frame(struc = .sep_deparse(x[[1]]),
-               var = .sep_product_margin_label(x[[2]]),
-               expr = I(list(x[[2]])),
+               var = .sep_product_margin_label(args[[1]]),
+               expr = I(list(args[[1]])),
+               extra = I(list(args[-1])),
                stringsAsFactors = FALSE)
 }
 
@@ -200,6 +210,9 @@ parseNumLevels <- function(levels) {
                           var = unname(x),
                           stringsAsFactors = FALSE)
     }
+    if (is.null(ans$extra)) {
+        ans$extra <- I(rep(list(list()), nrow(ans)))
+    }
     if (!all(ans$struc %in% names(.sep_margin_registry))) {
         bad <- unique(ans$struc[!ans$struc %in% names(.sep_margin_registry)])
         stop("Unsupported separable() ", what, ": ", paste(bad, collapse = ", "))
@@ -207,15 +220,32 @@ parseNumLevels <- function(levels) {
     ans
 }
 
+.sep_validate_margin_extras <- function(margins, what = "margin") {
+    margins <- .sep_spec_df(margins, what)
+    n_extra <- lengths(margins$extra)
+    n_expected <- vapply(margins$struc, function(z) {
+        .sep_margin_registry[[z]]$extra$n
+    }, integer(1))
+    bad <- which(n_extra != n_expected)
+    if (length(bad)) {
+        i <- bad[[1]]
+        stop("separable() ", what, " ", margins$struc[i], "(",
+             margins$var[i], ") takes ", n_expected[[i]],
+             " extra argument", if (n_expected[[i]] == 1L) "" else "s",
+             ", but got ", n_extra[[i]], ".")
+    }
+    margins
+}
+
 .sep_parse_spec <- function(x) {
     if (is.list(x) && !is.null(x$grid) && !is.null(x$margins)) {
-        x$margins <- as.data.frame(x$margins, stringsAsFactors = FALSE)
+        x$margins <- .sep_spec_df(x$margins)
         if (is.null(x$scale)) {
             x$scale <- list(mode = "auto", margins = NULL)
         } else if (!is.list(x$scale) || is.null(x$scale$mode)) {
             x$scale <- list(
                 mode = "margin",
-                margins = as.data.frame(x$scale, stringsAsFactors = FALSE)
+                margins = .sep_spec_df(x$scale)
             )
         }
         return(x)
@@ -281,8 +311,18 @@ parseNumLevels <- function(levels) {
          dist_coord_dim = if (needs_dist) as.integer(dist_coord_dim) else NA_integer_)
 }
 
+.sep_extra <- function(n = 0L, frame_args = integer()) {
+    n <- as.integer(n)
+    frame_args <- as.integer(frame_args)
+    if (length(n) != 1L || n < 0L || any(frame_args < 1L | frame_args > n)) {
+        stop("Malformed separable() extra-argument contract.")
+    }
+    list(n = n, frame_args = frame_args)
+}
+
 .sep_margin_entry <- function(code, builder, scale, theta,
-                              metadata = .sep_metadata()) {
+                              metadata = .sep_metadata(),
+                              extra = .sep_extra()) {
     if (is.null(scale$kind) || !is.function(scale$n) ||
         is.null(scale$can_scale) || is.null(scale$can_auto_scale)) {
         stop("Malformed separable() scale contract for ", code)
@@ -293,6 +333,9 @@ parseNumLevels <- function(levels) {
     if (is.null(metadata$needs_dist) || is.null(metadata$dist_coord_dim)) {
         stop("Malformed separable() metadata contract for ", code)
     }
+    if (is.null(extra$n) || is.null(extra$frame_args)) {
+        stop("Malformed separable() extra-argument contract for ", code)
+    }
     if (!scale$kind %in% c("none", "homogeneous", "heterogeneous")) {
         stop("Unknown separable() scale kind for ", code, ": ", scale$kind)
     }
@@ -301,7 +344,8 @@ parseNumLevels <- function(levels) {
         builder = builder,
         scale = scale,
         theta = theta,
-        metadata = metadata
+        metadata = metadata,
+        extra = extra
     )
 }
 
@@ -396,6 +440,14 @@ parseNumLevels <- function(levels) {
     paste0(x$struc, "(", x$var, ")", collapse = " x ")
 }
 
+.sep_margin_key <- function(x) {
+    x <- .sep_spec_df(x)
+    extra <- vapply(x$extra, function(z) {
+        paste(vapply(z, .sep_deparse, character(1)), collapse = "\r")
+    }, character(1))
+    paste(x$struc, x$var, extra, sep = "\r")
+}
+
 .sep_scale_label <- function(scale) {
     if (is.null(scale)) return("NULL")
     if (is.null(scale$margins) || nrow(scale$margins) == 0L) {
@@ -436,8 +488,8 @@ parseNumLevels <- function(levels) {
             stop("separable() scale must be a single margin call such as ",
                  "scale = us(0 + member).")
         }
-        scale_margin <- which(margins$struc == scale_spec$struc &
-                              margins$var == scale_spec$var)
+        scale_margin <- which(.sep_margin_key(margins) ==
+                              .sep_margin_key(scale_spec))
         if (length(scale_margin) != 1L) {
             stop("separable() scale must match one of the specified margins, ",
                  "for example scale = us(0 + member) when us(0 + member) ",
@@ -458,9 +510,8 @@ parseNumLevels <- function(levels) {
         }
     } else if (identical(scale_mode, "selected_product")) {
         scale_spec <- scale$margins
-        margin_key <- paste(margins$struc, margins$var, sep = "\r")
-        scale_key <- paste(scale_spec$struc, scale_spec$var, sep = "\r")
-        scale_margin <- match(scale_key, margin_key)
+        scale_margin <- match(.sep_margin_key(scale_spec),
+                              .sep_margin_key(margins))
         if (anyNA(scale_margin)) {
             i <- which(is.na(scale_margin))[[1]]
             stop("separable() scale margin ", scale_spec$struc[i], "(",
@@ -645,14 +696,15 @@ parseNumLevels <- function(levels) {
                 return(list(mode = "product", margins = NULL))
             }
             margins <- do.call(rbind, lapply(args, .sep_product_margin_spec))
-            margins <- .sep_spec_df(margins, "scale margin")
+            margins <- .sep_validate_margin_extras(margins, "scale margin")
             rownames(margins) <- NULL
             return(list(mode = "selected_product", margins = margins))
         }
     }
 
     list(mode = "margin",
-         margins = .sep_spec_df(.sep_product_margin_spec(scale), "scale margin"))
+         margins = .sep_validate_margin_extras(.sep_product_margin_spec(scale),
+                                               "scale margin"))
 }
 
 .sep_make_product_spec <- function(bar_expr, scale = NULL) {
@@ -674,6 +726,7 @@ parseNumLevels <- function(levels) {
              "e.g. us(0 + role) %x% ar1(0 + day).")
     }
     margins <- do.call(rbind, lapply(margin_calls, .sep_product_margin_spec))
+    margins <- .sep_validate_margin_extras(margins)
     rownames(margins) <- NULL
     if (anyDuplicated(margins$var)) {
         stop("separable() product margins must use distinct variables.")

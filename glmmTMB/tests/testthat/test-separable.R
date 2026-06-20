@@ -1006,6 +1006,18 @@ test_that("separable frontend parses simple existing covariance margins", {
     expect_equal(spec$scale$margins$struc, c("diag", "homtoep"))
 })
 
+test_that("separable parser carries margin extra arguments", {
+    m <- glmmTMB:::.sep_product_margin_spec(quote(ar1(0 + time, rho_source)))
+    m2 <- glmmTMB:::.sep_product_margin_spec(quote(ar1(0 + time, other_source)))
+
+    expect_equal(m$struc, "ar1")
+    expect_equal(m$var, "time")
+    expect_equal(length(m$extra[[1]]), 1L)
+    expect_equal(deparse(m$extra[[1]][[1]]), "rho_source")
+    expect_false(identical(glmmTMB:::.sep_margin_key(m),
+                           glmmTMB:::.sep_margin_key(m2)))
+})
+
 test_that("separable parser records global and product scale modes", {
     f_global <- y ~ 1 +
         separable(ar1(0 + member) %x% ar1(0 + time) | group,
@@ -1054,6 +1066,13 @@ test_that("separable selected product scale validates its margins", {
                               scale = product(us(0 + member), us(0 + member))),
                 data = dd, doFit = FALSE),
         "scale margins must be unique"
+    )
+    expect_error(
+        glmmTMB(y ~ 1 +
+                    separable(us(0 + member) %x% ar1(0 + time) | group,
+                              scale = product(ar1(0 + time, foo))),
+                data = dd, doFit = FALSE),
+        "scale margin ar1\\(time\\) takes 0 extra arguments, but got 1"
     )
     fit <- glmmTMB(y ~ 1 +
                        separable(us(0 + member) %x% ar1(0 + time) | group,
@@ -1232,6 +1251,12 @@ test_that("separable validates unsupported margins and scale choices", {
                     separable(foo(0 + member) %x% ar1(0 + time) | group),
                 data = dd, doFit = FALSE),
         "Unsupported separable\\(\\) margin: foo"
+    )
+    expect_error(
+        glmmTMB(y ~ 1 +
+                    separable(us(0 + member, extra) %x% ar1(0 + time) | group),
+                data = dd, doFit = FALSE),
+        "margin us\\(member\\) takes 0 extra arguments, but got 1"
     )
     expect_error(
         glmmTMB(y ~ 1 +
