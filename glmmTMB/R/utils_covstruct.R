@@ -510,6 +510,11 @@ parseNumLevels <- function(levels) {
     decay = 6L
 )
 
+.sep_matrix_payload_kind_code <- c(
+    distance = 1L,
+    cov_matrix = 2L
+)
+
 .sep_dispatch <- function(regs) {
     kinds <- vapply(regs, `[[`, character(1), "builder")
     if (!all(kinds %in% names(.sep_builder_kind_code))) return(NA_character_)
@@ -643,13 +648,34 @@ parseNumLevels <- function(levels) {
          paste0(supported, "()", collapse = ", "), ".")
 }
 
-.sep_distance_info <- function(regs, spec, dims) {
-    needs_dist <- vapply(regs, function(x) x$metadata$needs_dist, logical(1))
-    starts <- rep.int(-1L, length(dims))
-    dists <- numeric()
-    if (!any(needs_dist)) return(list(starts = starts, dists = dists))
+.sep_registry_matrix_payloads <- function(regs) {
+    lapply(regs, function(reg) {
+        payloads <- reg$extra$payloads
+        keep <- vapply(payloads, function(x) {
+            x$kind %in% names(.sep_matrix_payload_kind_code)
+        }, logical(1))
+        payloads[keep]
+    })
+}
 
-    if (is.null(spec$margin_cnms)) {
+.sep_matrix_payload_info <- function(regs, spec, dims) {
+    needs_dist <- vapply(regs, function(x) x$metadata$needs_dist, logical(1))
+    matrix_payloads <- .sep_registry_matrix_payloads(regs)
+    n_kind <- length(.sep_matrix_payload_kind_code)
+    starts <- rep.int(-1L, length(dims) * n_kind)
+    values <- numeric()
+
+    add_matrix <- function(i, kind, mat) {
+        if (nrow(mat) != dims[[i]] || ncol(mat) != dims[[i]]) {
+            stop("separable() ", kind, " matrix metadata does not match ",
+                 "the product design.")
+        }
+        k <- match(kind, names(.sep_matrix_payload_kind_code))
+        starts[(i - 1L) * n_kind + k] <<- length(values)
+        values <<- c(values, as.vector(mat))
+    }
+
+    if (any(needs_dist) && is.null(spec$margin_cnms)) {
         stop("separable() spatial margins require product-margin column names.")
     }
     for (i in which(needs_dist)) {
@@ -668,10 +694,22 @@ parseNumLevels <- function(levels) {
             stop("'", regs[[i]]$code, "' separable() margins are for ",
                  coord_dim, "D coordinates only.")
         }
-        starts[[i]] <- length(dists)
-        dists <- c(dists, as.vector(as.matrix(stats::dist(coords))))
+        add_matrix(i, "distance", as.matrix(stats::dist(coords)))
     }
-    list(starts = starts, dists = dists)
+    for (i in seq_along(matrix_payloads)) {
+        for (payload in matrix_payloads[[i]]) {
+            mat <- spec$margin_payloads[[i]][[payload$kind]]
+            if (is.null(mat)) {
+                stop("separable() ", payload$kind, " margin is missing ",
+                     "matrix metadata.")
+            }
+            add_matrix(i, payload$kind, mat)
+        }
+    }
+
+    list(kinds = as.integer(.sep_matrix_payload_kind_code),
+         starts = as.integer(starts),
+         values = values)
 }
 
 .sep_theta_block_layout <- function(regs, dims, scale_info) {
@@ -744,8 +782,7 @@ parseNumLevels <- function(levels) {
     ntheta <- sum(theta_layout$length)
     builder_kind <- vapply(regs, `[[`, character(1), "builder")
     scale_kind <- vapply(regs, function(x) x$scale$kind, character(1))
-    distance_info <- .sep_distance_info(regs, spec, dims)
-    cov_info <- .sep_fixed_cov_info(regs, spec, dims)
+    matrix_info <- .sep_matrix_payload_info(regs, spec, dims)
 
     list(
         dims = dims,
@@ -761,10 +798,9 @@ parseNumLevels <- function(levels) {
         theta_block_kinds = theta_layout$kind,
         theta_block_starts = theta_layout$start,
         theta_block_lengths = theta_layout$length,
-        dist_starts = distance_info$starts,
-        dists = distance_info$dists,
-        fixed_cov_starts = cov_info$starts,
-        fixed_covs = cov_info$covs,
+        matrix_payload_kinds = matrix_info$kinds,
+        matrix_payload_starts = matrix_info$starts,
+        matrix_payload_values = matrix_info$values,
         ntheta = as.integer(ntheta)
     )
 }
@@ -945,22 +981,6 @@ parseNumLevels <- function(levels) {
         }), vapply(specs, `[[`, character(1), "kind"))
     }
     payloads
-}
-
-.sep_fixed_cov_info <- function(regs, spec, dims) {
-    starts <- rep.int(-1L, length(dims))
-    covs <- numeric()
-    for (i in seq_along(regs)) {
-        if (!identical(regs[[i]]$builder, "fixed_cov")) next
-        cov <- spec$margin_payloads[[i]][["cov_matrix"]]
-        if (is.null(cov) || nrow(cov) != dims[[i]] || ncol(cov) != dims[[i]]) {
-            stop("separable() fixed covariance margin metadata does not match ",
-                 "the product design.")
-        }
-        starts[[i]] <- length(covs)
-        covs <- c(covs, as.vector(cov))
-    }
-    list(starts = starts, covs = covs)
 }
 
 .sep_sparse_rows <- function(X, n) {

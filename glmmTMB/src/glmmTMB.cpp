@@ -142,6 +142,12 @@ enum separable_theta_block_kind {
   decay_theta_block = 6
 };
 
+enum separable_matrix_payload_kind {
+  // These values must match `.sep_matrix_payload_kind_code` in R/utils_covstruct.R.
+  distance_matrix_payload = 1,
+  covariance_matrix_payload = 2
+};
+
 // should probably be named just 'predictCode';
 // originally for enabling z-i prediction
 // 'corrected' = mean prediction incorporates z-i effects
@@ -401,10 +407,9 @@ struct per_term_info {
   vector<int> sepThetaBlockKinds;
   vector<int> sepThetaBlockStarts;
   vector<int> sepThetaBlockLengths;
-  vector<int> sepDistStarts;
-  vector<Type> sepDists;
-  vector<int> sepFixedCovStarts;
-  vector<Type> sepFixedCovs;
+  vector<int> sepMatrixPayloadKinds;
+  vector<int> sepMatrixPayloadStarts;
+  vector<Type> sepMatrixPayloadValues;
   // Report output
   matrix<Type> corr;
   vector<Type> sd;
@@ -501,25 +506,20 @@ struct terms_t : vector<per_term_info<Type> > {
 	RObjectTestExpectedType(sthetalengths, &Rf_isNumeric, "sepThetaBlockLengths");
 	(*this)(i).sepThetaBlockLengths = asVector<int>(sthetalengths);
       }
-      SEXP sdiststarts = getListElement(y, "sepDistStarts");
-      if(!Rf_isNull(sdiststarts)){
-	RObjectTestExpectedType(sdiststarts, &Rf_isNumeric, "sepDistStarts");
-	(*this)(i).sepDistStarts = asVector<int>(sdiststarts);
+      SEXP smatrixkinds = getListElement(y, "sepMatrixPayloadKinds");
+      if(!Rf_isNull(smatrixkinds)){
+	RObjectTestExpectedType(smatrixkinds, &Rf_isNumeric, "sepMatrixPayloadKinds");
+	(*this)(i).sepMatrixPayloadKinds = asVector<int>(smatrixkinds);
       }
-      SEXP sdists = getListElement(y, "sepDists");
-      if(!Rf_isNull(sdists)){
-	RObjectTestExpectedType(sdists, &Rf_isNumeric, "sepDists");
-	(*this)(i).sepDists = asVector<Type>(sdists);
+      SEXP smatrixstarts = getListElement(y, "sepMatrixPayloadStarts");
+      if(!Rf_isNull(smatrixstarts)){
+	RObjectTestExpectedType(smatrixstarts, &Rf_isNumeric, "sepMatrixPayloadStarts");
+	(*this)(i).sepMatrixPayloadStarts = asVector<int>(smatrixstarts);
       }
-      SEXP sfcovstarts = getListElement(y, "sepFixedCovStarts");
-      if(!Rf_isNull(sfcovstarts)){
-	RObjectTestExpectedType(sfcovstarts, &Rf_isNumeric, "sepFixedCovStarts");
-	(*this)(i).sepFixedCovStarts = asVector<int>(sfcovstarts);
-      }
-      SEXP sfcovs = getListElement(y, "sepFixedCovs");
-      if(!Rf_isNull(sfcovs)){
-	RObjectTestExpectedType(sfcovs, &Rf_isNumeric, "sepFixedCovs");
-	(*this)(i).sepFixedCovs = asVector<Type>(sfcovs);
+      SEXP smatrixvalues = getListElement(y, "sepMatrixPayloadValues");
+      if(!Rf_isNull(smatrixvalues)){
+	RObjectTestExpectedType(smatrixvalues, &Rf_isNumeric, "sepMatrixPayloadValues");
+	(*this)(i).sepMatrixPayloadValues = asVector<Type>(smatrixvalues);
       }
     }
   }
@@ -804,37 +804,40 @@ void parse_separable_toep_margin(const sep_margin_spec& margin,
 }
 
 template <class Type>
-matrix<Type> separable_margin_dist(per_term_info<Type>& term, int m) {
+matrix<Type> separable_margin_matrix(per_term_info<Type>& term, int m,
+				     int kind, const char *what) {
   int n = term.sepDims(m);
-  if (term.sepDistStarts.size() != term.sepDims.size() ||
-      term.sepDistStarts(m) < 0)
-    error("separable spatial margin is missing distance metadata");
-  int start = term.sepDistStarts(m);
-  if (start + n * n > term.sepDists.size())
-    error("separable spatial margin has invalid distance metadata");
+  int n_kind = term.sepMatrixPayloadKinds.size();
+  int k = -1;
+  for (int i = 0; i < n_kind; i++)
+    if (term.sepMatrixPayloadKinds(i) == kind) k = i;
+  if (k < 0 ||
+      term.sepMatrixPayloadStarts.size() != term.sepDims.size() * n_kind)
+    error("separable margin is missing %s matrix metadata", what);
 
-  matrix<Type> dist(n, n);
+  int start = term.sepMatrixPayloadStarts(m * n_kind + k);
+  if (start < 0)
+    error("separable margin is missing %s matrix metadata", what);
+  if (start + n * n > term.sepMatrixPayloadValues.size())
+    error("separable margin has invalid %s matrix metadata", what);
+
+  matrix<Type> mat(n, n);
   for (int j = 0; j < n; j++)
     for (int i = 0; i < n; i++)
-      dist(i, j) = term.sepDists(start + i + n * j);
-  return dist;
+      mat(i, j) = term.sepMatrixPayloadValues(start + i + n * j);
+  return mat;
+}
+
+template <class Type>
+matrix<Type> separable_margin_dist(per_term_info<Type>& term, int m) {
+  return separable_margin_matrix(term, m, distance_matrix_payload,
+				 "distance");
 }
 
 template <class Type>
 matrix<Type> separable_margin_fixed_cov(per_term_info<Type>& term, int m) {
-  int n = term.sepDims(m);
-  if (term.sepFixedCovStarts.size() != term.sepDims.size() ||
-      term.sepFixedCovStarts(m) < 0)
-    error("separable fixed covariance margin is missing matrix metadata");
-  int start = term.sepFixedCovStarts(m);
-  if (start + n * n > term.sepFixedCovs.size())
-    error("separable fixed covariance margin has invalid matrix metadata");
-
-  matrix<Type> cov(n, n);
-  for (int j = 0; j < n; j++)
-    for (int i = 0; i < n; i++)
-      cov(i, j) = term.sepFixedCovs(start + i + n * j);
-  return cov;
+  return separable_margin_matrix(term, m, covariance_matrix_payload,
+				 "fixed covariance");
 }
 
 template <class Type>
@@ -1139,7 +1142,8 @@ matrix<Type> kronecker_corr(const matrix<Type>& left,
 
 template <class Type>
 sep_corr_product_pars<Type> parse_separable_corr_product(const vector<Type>& theta,
-							 per_term_info<Type>& term) {
+							 per_term_info<Type>& term,
+							 bool build_corr) {
   sep_corr_product_pars<Type> out;
   check_separable_theta_layout(term, theta.size());
   int n_margin = term.sepDims.size();
@@ -1157,6 +1161,7 @@ sep_corr_product_pars<Type> parse_separable_corr_product(const vector<Type>& the
       build_separable_margin_cov(spec, theta, term);
     margin_sd(m) = margin.sd;
     out.margin_corr.push_back(margin.corr);
+    if (!build_corr) continue;
     if (m == 0) {
       out.corr = margin.corr;
     } else {
@@ -1624,7 +1629,10 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
     check_separable_metadata(term);
     switch (term.sepDispatch(0)) {
     case corr_matrix_product_dispatch: {
-      sep_corr_product_pars<Type> sep = parse_separable_corr_product(theta, term);
+      bool dense_fallback = term.sepDims.size() > 5;
+      bool build_corr = dense_fallback || do_simulate || term.fullCor == 1;
+      sep_corr_product_pars<Type> sep =
+	parse_separable_corr_product(theta, term, build_corr);
       if (term.sepDims.size() == 2) {
 	density::MVNORM_t<Type> density0(sep.margin_corr[0]);
 	density::MVNORM_t<Type> density1(sep.margin_corr[1]);

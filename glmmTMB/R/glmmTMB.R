@@ -1161,10 +1161,9 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
             tmp$sepThetaBlockKinds <- sepInfo[[i]]$theta_block_kinds
             tmp$sepThetaBlockStarts <- sepInfo[[i]]$theta_block_starts
             tmp$sepThetaBlockLengths <- sepInfo[[i]]$theta_block_lengths
-            tmp$sepDistStarts <- sepInfo[[i]]$dist_starts
-            tmp$sepDists <- sepInfo[[i]]$dists
-            tmp$sepFixedCovStarts <- sepInfo[[i]]$fixed_cov_starts
-            tmp$sepFixedCovs <- sepInfo[[i]]$fixed_covs
+            tmp$sepMatrixPayloadKinds <- sepInfo[[i]]$matrix_payload_kinds
+            tmp$sepMatrixPayloadStarts <- sepInfo[[i]]$matrix_payload_starts
+            tmp$sepMatrixPayloadValues <- sepInfo[[i]]$matrix_payload_values
         }
         ans[[i]] <- tmp
     }

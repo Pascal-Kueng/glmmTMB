@@ -1061,6 +1061,71 @@ test_that("separable records registry-derived theta blocks", {
     expect_equal(restruc$sepThetaBlockLengths, c(1L, 1L, 1L))
 })
 
+test_that("separable records and uses generic margin matrix payloads", {
+    dd <- expand.grid(member = factor(c("a", "b")),
+                      time = numFactor(c(0, 1, 3)),
+                      group = factor(1:2))
+    dd$y <- 0
+    K <- matrix(c(1, 0.2, 0.2, 1.4), 2, 2,
+                dimnames = list(levels(dd$member), levels(dd$member)))
+    theta <- -0.2
+    global_sd <- 1.25
+
+    form <- y ~ 1 +
+        separable(propto(0 + member, K) %x%
+                  ou(0 + time) | group,
+                  scale = global())
+    dense_form <- y ~ 1 + us(sepgrid(member, time) + 0 | group)
+    env <- list2env(list(K = K), parent = environment())
+    environment(form) <- env
+    environment(dense_form) <- env
+
+    fit <- glmmTMB(form, data = dd, doFit = FALSE)
+    restruc <- fit$condReStruc[[1]]
+
+    expect_equal(restruc$sepMatrixPayloadKinds, c(1L, 2L))
+    expect_length(restruc$sepMatrixPayloadStarts,
+                  length(restruc$sepDims) *
+                      length(restruc$sepMatrixPayloadKinds))
+
+    payload_matrix <- function(margin, kind, n) {
+        n_kind <- length(restruc$sepMatrixPayloadKinds)
+        k <- match(kind, restruc$sepMatrixPayloadKinds)
+        start <- restruc$sepMatrixPayloadStarts[(margin - 1L) * n_kind + k]
+        if (start < 0L) return(NULL)
+        matrix(restruc$sepMatrixPayloadValues[start + seq_len(n * n)], n, n)
+    }
+    expect_equal(payload_matrix(1L, 2L, 2L), unname(K))
+    expect_null(payload_matrix(1L, 1L, 2L))
+    expect_equal(payload_matrix(2L, 1L, 3L),
+                 unname(as.matrix(stats::dist(c(0, 1, 3)))))
+    expect_null(payload_matrix(2L, 2L, 3L))
+
+    R_member <- cov2cor(K)
+    R_time <- exp(-exp(theta) * as.matrix(stats::dist(c(0, 1, 3))))
+    diag(R_time) <- 1
+    sd_full <- unname(global_sd * rep(sqrt(diag(K)), 3))
+    R_full <- kronecker(R_time, R_member)
+    case <- list(
+        form = form,
+        dense_form = dense_form,
+        dd = dd,
+        theta = c(log(global_sd), theta),
+        theta_dense = c(log(sd_full), put_cor(R_full)),
+        R_full = R_full,
+        sd_full = sd_full,
+        codes = unname(c(.valid_covstruct[["propto"]],
+                         .valid_covstruct[["ou"]])),
+        kinds = c(sep_kind_code("propto"), sep_kind_code("ou")),
+        scale_kinds = c(1L, 1L),
+        dispatch = 1L,
+        scale_mode = 2L,
+        scale_spec = integer()
+    )
+    expect_separable_case_vc(case)
+    expect_separable_case_nll(case)
+})
+
 test_that("separable selected product scale validates its margins", {
     dd <- make_sep_dat()
 
