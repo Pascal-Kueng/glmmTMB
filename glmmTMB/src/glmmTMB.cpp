@@ -118,6 +118,7 @@ enum separable_dispatch {
 
 enum separable_scale_mode {
   // These values must match `.sep_scale_mode_code` in R/utils_covstruct.R.
+  no_sep_scale = 0,
   margin_sep_scale = 1,
   global_sep_scale = 2,
   product_sep_scale = 3,
@@ -374,7 +375,7 @@ struct per_term_info {
   //   3 = diagonal correlation margin (currently diag or homdiag)
   //   4 = spatial correlation margin (currently ou, exp, gau, or mat)
   //   5 = Toeplitz correlation margin (currently toep or homtoep)
-  //   6 = fixed covariance margin (currently propto)
+  //   6 = fixed covariance margin (currently propto or equalto)
   //
   // `sepDispatch` selects the C++ evaluator.  The current backend uses one
   // evaluator for any margin product that can be represented by correlation
@@ -615,7 +616,7 @@ bool is_spatial_margin(int code) {
 }
 
 bool is_fixed_cov_margin(int code) {
-  return code == propto_covstruct;
+  return code == propto_covstruct || code == equalto_covstruct;
 }
 
 template <class Type>
@@ -913,11 +914,14 @@ void check_separable_metadata(per_term_info<Type>& term) {
   if (n != term.blockSize)
     error("separable dimensions do not match block size");
   int mode = term.sepScaleMode(0);
-  if (mode < margin_sep_scale || mode > selected_product_sep_scale)
+  if (mode < no_sep_scale || mode > selected_product_sep_scale)
     error("unknown separable scale mode");
+  if (mode == no_sep_scale && term.sepScaleSpec.size() != 0)
+    error("separable no-scale mode should not specify scale margins");
   if (mode == global_sep_scale && term.sepScaleSpec.size() != 0)
     error("separable global scale should not specify scale margins");
-  if (mode != global_sep_scale && term.sepScaleSpec.size() == 0)
+  if (mode != no_sep_scale && mode != global_sep_scale &&
+      term.sepScaleSpec.size() == 0)
     error("separable scale mode is missing selected margins");
   for (int i = 0; i < term.sepScaleSpec.size(); i++)
     if (term.sepScaleSpec(i) < 0 ||

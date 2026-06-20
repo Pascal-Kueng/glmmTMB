@@ -323,7 +323,7 @@ sep_kind_code <- function(struc) {
            diag = 3L, homdiag = 3L,
            ou = 4L, exp = 4L, gau = 4L, mat = 4L,
            toep = 5L, homtoep = 5L,
-           propto = 6L)
+           propto = 6L, equalto = 6L)
 }
 
 make_sep_margin_pair_case <- function(m0, m1,
@@ -1512,6 +1512,52 @@ test_that("separable supports propto matrix margins", {
         dispatch = 1L,
         scale_mode = 1L,
         scale_spec = 0L
+    )
+
+    expect_separable_case_vc(case)
+    expect_separable_case_nll(case)
+})
+
+test_that("separable supports equalto matrix margins without estimated scale", {
+    n_member <- 3
+    n_time <- 4
+    dd <- expand.grid(member = factor(paste0("m", seq_len(n_member))),
+                      time = factor(seq_len(n_time)),
+                      group = factor(seq_len(2)))
+    dd$y <- 0
+
+    K <- matrix(c(1.00, 0.25, 0.10,
+                  0.25, 1.44, 0.20,
+                  0.10, 0.20, 0.81), n_member, n_member)
+    phi <- 0.35
+    R_member <- cov2cor(K)
+    R_time <- outer(seq_len(n_time), seq_len(n_time),
+                    function(i, j) phi^abs(i - j))
+    sd_member <- unname(sqrt(diag(K)))
+    R_full <- kronecker(R_time, R_member)
+    sd_full <- rep(sd_member, n_time)
+
+    form <- y ~ 1 +
+        separable(equalto(0 + member, K) %x% ar1(0 + time) | group)
+    dense_form <- y ~ 1 + us(sepgrid(member, time) + 0 | group)
+    env <- list2env(list(K = K), parent = environment())
+    environment(form) <- env
+    environment(dense_form) <- env
+    case <- list(
+        form = form,
+        dense_form = dense_form,
+        dd = dd,
+        theta = ar1_to_theta(phi),
+        theta_dense = c(log(sd_full), put_cor(R_full)),
+        R_full = R_full,
+        sd_full = sd_full,
+        codes = unname(c(.valid_covstruct[["equalto"]],
+                         .valid_covstruct[["ar1"]])),
+        kinds = c(sep_kind_code("equalto"), sep_kind_code("ar1")),
+        scale_kinds = c(0L, 1L),
+        dispatch = 1L,
+        scale_mode = 0L,
+        scale_spec = integer()
     )
 
     expect_separable_case_vc(case)

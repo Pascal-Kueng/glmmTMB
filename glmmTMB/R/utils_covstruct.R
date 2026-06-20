@@ -290,14 +290,16 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_scale <- function(kind = c("none", "homogeneous", "heterogeneous"),
-                       n = 0L, auto = NULL) {
+                       n = 0L, auto = NULL, fixed = FALSE) {
     kind <- match.arg(kind)
     n_fun <- if (is.function(n)) n else function(d) n
     can_scale <- !identical(kind, "none")
     if (is.null(auto)) auto <- can_scale
+    fixed <- isTRUE(fixed)
     list(kind = kind,
          can_scale = can_scale,
          can_auto_scale = auto,
+         fixed_scale = fixed,
          n = function(d) as.integer(n_fun(d)))
 }
 
@@ -327,7 +329,8 @@ parseNumLevels <- function(levels) {
                               metadata = .sep_metadata(),
                               extra = .sep_extra()) {
     if (is.null(scale$kind) || !is.function(scale$n) ||
-        is.null(scale$can_scale) || is.null(scale$can_auto_scale)) {
+        is.null(scale$can_scale) || is.null(scale$can_auto_scale) ||
+        is.null(scale$fixed_scale)) {
         stop("Malformed separable() scale contract for ", code)
     }
     if (is.null(theta$blocks)) {
@@ -400,6 +403,10 @@ parseNumLevels <- function(levels) {
     propto = .sep_margin_entry("propto", "fixed_cov",
                                .sep_scale("homogeneous", 1L),
                                .sep_theta(),
+                               extra = .sep_extra(n = 1L, cov_args = 1L)),
+    equalto = .sep_margin_entry("equalto", "fixed_cov",
+                                .sep_scale("none", fixed = TRUE),
+                                .sep_theta(),
                                extra = .sep_extra(n = 1L, cov_args = 1L))
 )
 
@@ -417,6 +424,7 @@ parseNumLevels <- function(levels) {
 .sep_dispatch_code <- c(corr_matrix_product = 1L)
 
 .sep_scale_mode_code <- c(
+    none = 0L,            # fixed scales supplied by one or more margins
     margin = 1L,          # one margin supplies absolute SDs
     global = 2L,          # one global scale, all margins correlation-only
     product = 3L,         # all eligible margin scales multiply
@@ -473,24 +481,30 @@ parseNumLevels <- function(levels) {
     can_scale <- vapply(regs, function(x) x$scale$can_scale, logical(1))
     can_auto_scale <- vapply(regs, function(x) x$scale$can_auto_scale,
                               logical(1))
+    fixed_scale <- vapply(regs, function(x) x$scale$fixed_scale, logical(1))
     scale_candidates <- which(can_auto_scale)
     scale_mode <- if (is.null(scale)) "auto" else scale$mode
 
     if (identical(scale_mode, "auto")) {
         if (length(scale_candidates) == 0L) {
-            stop("separable() margins ", .sep_margin_label(margins),
-                 " have no unambiguous scale margin. Use scale = global() ",
-                 "or choose a scale margin explicitly.")
-        }
-        if (length(scale_candidates) > 1L) {
+            if (any(fixed_scale)) {
+                scale_mode <- "none"
+                scale_margin <- integer()
+            } else {
+                stop("separable() margins ", .sep_margin_label(margins),
+                     " have no unambiguous scale margin. Use scale = global() ",
+                     "or choose a scale margin explicitly.")
+            }
+        } else if (length(scale_candidates) > 1L) {
             stop("More than one separable() margin can carry scale in ",
                  .sep_margin_label(margins), ". Please specify the scale mode ",
                  "explicitly, for example scale = global(), scale = product(), ",
                  "or scale = ", margins$struc[scale_candidates[1]],
                  "(", margins$var[scale_candidates[1]], ").")
+        } else {
+            scale_mode <- "margin"
+            scale_margin <- scale_candidates
         }
-        scale_mode <- "margin"
-        scale_margin <- scale_candidates
     } else if (identical(scale_mode, "margin")) {
         scale_spec <- scale$margins
         if (nrow(scale_spec) != 1L) {
@@ -538,6 +552,8 @@ parseNumLevels <- function(levels) {
         if (anyDuplicated(scale_margin)) {
             stop("separable() scale margins must be unique.")
         }
+    } else if (identical(scale_mode, "none")) {
+        scale_margin <- integer()
     } else {
         stop("Unknown separable() scale mode: ", scale_mode)
     }
