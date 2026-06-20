@@ -1149,6 +1149,8 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
             ## Spec fields needed to reshape flat random-effect blocks and
             ## dispatch to the separable marginal densities in C++.
             tmp$sepDims <- sepInfo[[i]]$dims
+            tmp$sepMarginStruc <- sepInfo[[i]]$margin_struc
+            tmp$sepMarginVars <- sepInfo[[i]]$margin_vars
             tmp$sepCodes <- sepInfo[[i]]$codes
             tmp$sepBuilderKinds <- sepInfo[[i]]$builder_kinds
             tmp$sepScaleKinds <- sepInfo[[i]]$scale_kinds

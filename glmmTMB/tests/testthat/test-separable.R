@@ -198,6 +198,16 @@ expect_separable_case_vc <- function(case) {
     expect_equal(restruc$sepDispatch, case$dispatch)
     expect_equal(restruc$sepScaleMode, case$scale_mode)
     expect_equal(restruc$sepScaleSpec, case$scale_spec)
+    sep_meta <- attr(vc, "separable")
+    margin_labels <- paste0(restruc$sepMarginStruc, "(",
+                            restruc$sepMarginVars, ")")
+    expect_equal(sep_meta$margins$dim, restruc$sepDims)
+    expect_equal(sep_meta$margins$label, margin_labels)
+    expect_equal(sep_meta$scale$mode,
+                 names(.sep_scale_mode_code)[match(restruc$sepScaleMode,
+                                                    unname(.sep_scale_mode_code))])
+    expect_equal(sep_meta$scale$margins,
+                 margin_labels[as.integer(restruc$sepScaleSpec) + 1L])
     expect_equal(unname(attr(vc, "stddev")), case$sd_full, tolerance = 1e-6)
     expect_equal(unname(attr(vc, "correlation")), case$R_full, tolerance = 1e-6)
 }

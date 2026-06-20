@@ -159,6 +159,36 @@ mkVC <- function(cor, sd, cnms, sc, bc, useSc) {
     ss
 }
 
+.sep_vc_metadata <- function(restruc) {
+    if (!identical(unname(restruc$blockCode),
+                   unname(.valid_covstruct[["separable"]]))) {
+        return(NULL)
+    }
+    dims <- as.integer(restruc$sepDims)
+    struc <- restruc$sepMarginStruc
+    vars <- restruc$sepMarginVars
+    if (is.null(struc)) {
+        struc <- names(.valid_covstruct)[match(restruc$sepCodes,
+                                               unname(.valid_covstruct))]
+    }
+    if (is.null(vars)) {
+        vars <- paste0("margin", seq_along(dims))
+    }
+    labels <- paste0(struc, "(", vars, ")")
+    margins <- data.frame(structure = unname(struc),
+                          variable = unname(vars),
+                          dim = dims,
+                          label = unname(labels),
+                          stringsAsFactors = FALSE)
+    scale_margins <- as.integer(restruc$sepScaleSpec) + 1L
+    scale_margins <- scale_margins[scale_margins %in% seq_along(labels)]
+    scale_mode <- names(.sep_scale_mode_code)[
+        match(restruc$sepScaleMode, unname(.sep_scale_mode_code))]
+    list(margins = margins,
+         scale = list(mode = unname(scale_mode),
+                      margins = unname(labels[scale_margins])))
+}
+
 ##' Extract variance and correlation components
 ##'
 ##' @aliases VarCorr
@@ -225,6 +255,8 @@ VarCorr.glmmTMB <- function(x, sigma = 1, ... )
                        useSc = useSc)
             for (j in seq_along(vc)) {
                 attr(vc[[j]],"blockCode") <- bcvec[[j]]
+                sep_meta <- .sep_vc_metadata(restruc[[j]])
+                if (!is.null(sep_meta)) attr(vc[[j]],"separable") <- sep_meta
                 class(vc[[j]]) <- c(paste0("vcmat_", names(bcvec[[j]])), class(vc[[j]]))
             }
             corr_list[[comp_nms2[[i]]]] <- vc

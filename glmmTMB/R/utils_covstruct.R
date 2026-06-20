@@ -749,6 +749,8 @@ parseNumLevels <- function(levels) {
 
     list(
         dims = dims,
+        margin_struc = strucs,
+        margin_vars = margins$var,
         codes = as.integer(vapply(strucs, function(z) .valid_covstruct[[z]], numeric(1))),
         builder_kinds = as.integer(.sep_builder_kind_code[builder_kind]),
         scale_kinds = as.integer(.sep_scale_kind_code[scale_kind]),
