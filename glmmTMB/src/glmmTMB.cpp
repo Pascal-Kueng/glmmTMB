@@ -107,7 +107,8 @@ enum separable_builder_kind {
   ar1_builder = 2,
   diag_builder = 3,
   spatial_builder = 4,
-  toep_builder = 5
+  toep_builder = 5,
+  fixed_cov_builder = 6
 };
 
 enum separable_dispatch {
@@ -373,6 +374,7 @@ struct per_term_info {
   //   3 = diagonal correlation margin (currently diag or homdiag)
   //   4 = spatial correlation margin (currently ou, exp, gau, or mat)
   //   5 = Toeplitz correlation margin (currently toep or homtoep)
+  //   6 = fixed covariance margin (currently propto)
   //
   // `sepDispatch` selects the C++ evaluator.  The current backend uses one
   // evaluator for any margin product that can be represented by correlation
@@ -400,6 +402,8 @@ struct per_term_info {
   vector<int> sepThetaBlockLengths;
   vector<int> sepDistStarts;
   vector<Type> sepDists;
+  vector<int> sepFixedCovStarts;
+  vector<Type> sepFixedCovs;
   // Report output
   matrix<Type> corr;
   vector<Type> sd;
@@ -506,6 +510,16 @@ struct terms_t : vector<per_term_info<Type> > {
 	RObjectTestExpectedType(sdists, &Rf_isNumeric, "sepDists");
 	(*this)(i).sepDists = asVector<Type>(sdists);
       }
+      SEXP sfcovstarts = getListElement(y, "sepFixedCovStarts");
+      if(!Rf_isNull(sfcovstarts)){
+	RObjectTestExpectedType(sfcovstarts, &Rf_isNumeric, "sepFixedCovStarts");
+	(*this)(i).sepFixedCovStarts = asVector<int>(sfcovstarts);
+      }
+      SEXP sfcovs = getListElement(y, "sepFixedCovs");
+      if(!Rf_isNull(sfcovs)){
+	RObjectTestExpectedType(sfcovs, &Rf_isNumeric, "sepFixedCovs");
+	(*this)(i).sepFixedCovs = asVector<Type>(sfcovs);
+      }
     }
   }
 };
@@ -598,6 +612,10 @@ bool is_toep_margin(int code) {
 bool is_spatial_margin(int code) {
   return code == ou_covstruct || code == exp_covstruct ||
     code == gau_covstruct || code == mat_covstruct;
+}
+
+bool is_fixed_cov_margin(int code) {
+  return code == propto_covstruct;
 }
 
 template <class Type>
@@ -793,6 +811,23 @@ matrix<Type> separable_margin_dist(per_term_info<Type>& term, int m) {
 }
 
 template <class Type>
+matrix<Type> separable_margin_fixed_cov(per_term_info<Type>& term, int m) {
+  int n = term.sepDims(m);
+  if (term.sepFixedCovStarts.size() != term.sepDims.size() ||
+      term.sepFixedCovStarts(m) < 0)
+    error("separable fixed covariance margin is missing matrix metadata");
+  int start = term.sepFixedCovStarts(m);
+  if (start + n * n > term.sepFixedCovs.size())
+    error("separable fixed covariance margin has invalid matrix metadata");
+
+  matrix<Type> cov(n, n);
+  for (int j = 0; j < n; j++)
+    for (int i = 0; i < n; i++)
+      cov(i, j) = term.sepFixedCovs(start + i + n * j);
+  return cov;
+}
+
+template <class Type>
 void parse_separable_spatial_margin(const sep_margin_spec& margin,
 				    const vector<Type>& theta,
 				    per_term_info<Type>& term,
@@ -837,6 +872,31 @@ void parse_separable_spatial_margin(const sep_margin_spec& margin,
       }
     }
   }
+}
+
+template <class Type>
+void parse_separable_fixed_cov_margin(const sep_margin_spec& margin,
+				      const vector<Type>& theta,
+				      per_term_info<Type>& term,
+				      const matrix<Type>& cov,
+				      vector<Type>& margin_sd,
+				      matrix<Type>& corr) {
+  if (!is_fixed_cov_margin(margin.code))
+    error("unsupported fixed covariance margin for separable covariance structure");
+
+  margin_sd.resize(margin.n);
+  corr.resize(margin.n, margin.n);
+  vector<Type> extra_sd(margin.n);
+  extra_sd.fill(Type(1));
+  parse_separable_margin_sd(margin, theta, term, extra_sd);
+  for (int i = 0; i < margin.n; i++) {
+    if (cov(i, i) <= Type(0))
+      error("separable fixed covariance margin must have positive diagonal");
+    margin_sd(i) = sqrt(cov(i, i)) * extra_sd(i);
+  }
+  for (int i = 0; i < margin.n; i++)
+    for (int j = 0; j < margin.n; j++)
+      corr(i, j) = cov(i, j) / (sqrt(cov(i, i)) * sqrt(cov(j, j)));
 }
 
 template <class Type>
@@ -1032,6 +1092,10 @@ sep_margin_cov<Type> build_separable_margin_cov(sep_margin_spec margin,
     matrix<Type> dist = separable_margin_dist(term, margin.index);
     parse_separable_spatial_margin(margin, theta, term, dist,
 				   out.sd, out.corr);
+  } else if (margin.builder_kind == fixed_cov_builder) {
+    matrix<Type> cov = separable_margin_fixed_cov(term, margin.index);
+    parse_separable_fixed_cov_margin(margin, theta, term, cov,
+				     out.sd, out.corr);
   } else {
     error("unsupported separable margin for correlation-matrix evaluator");
   }

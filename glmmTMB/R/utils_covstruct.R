@@ -311,13 +311,16 @@ parseNumLevels <- function(levels) {
          dist_coord_dim = if (needs_dist) as.integer(dist_coord_dim) else NA_integer_)
 }
 
-.sep_extra <- function(n = 0L, frame_args = integer()) {
+.sep_extra <- function(n = 0L, frame_args = integer(), cov_args = integer()) {
     n <- as.integer(n)
     frame_args <- as.integer(frame_args)
-    if (length(n) != 1L || n < 0L || any(frame_args < 1L | frame_args > n)) {
+    cov_args <- as.integer(cov_args)
+    if (length(n) != 1L || n < 0L ||
+        any(frame_args < 1L | frame_args > n) ||
+        any(cov_args < 1L | cov_args > n)) {
         stop("Malformed separable() extra-argument contract.")
     }
-    list(n = n, frame_args = frame_args)
+    list(n = n, frame_args = frame_args, cov_args = cov_args)
 }
 
 .sep_margin_entry <- function(code, builder, scale, theta,
@@ -333,7 +336,8 @@ parseNumLevels <- function(levels) {
     if (is.null(metadata$needs_dist) || is.null(metadata$dist_coord_dim)) {
         stop("Malformed separable() metadata contract for ", code)
     }
-    if (is.null(extra$n) || is.null(extra$frame_args)) {
+    if (is.null(extra$n) || is.null(extra$frame_args) ||
+        is.null(extra$cov_args)) {
         stop("Malformed separable() extra-argument contract for ", code)
     }
     if (!scale$kind %in% c("none", "homogeneous", "heterogeneous")) {
@@ -392,7 +396,11 @@ parseNumLevels <- function(levels) {
                              .sep_theta(corr = function(n) n - 1L)),
     homtoep = .sep_margin_entry("homtoep", "toep",
                                 .sep_scale("homogeneous", 1L),
-                                .sep_theta(corr = function(n) n - 1L))
+                                .sep_theta(corr = function(n) n - 1L)),
+    propto = .sep_margin_entry("propto", "fixed_cov",
+                               .sep_scale("homogeneous", 1L),
+                               .sep_theta(),
+                               extra = .sep_extra(n = 1L, cov_args = 1L))
 )
 
 ## Each supported separable builder kind must have a C++ margin builder that
@@ -402,7 +410,8 @@ parseNumLevels <- function(levels) {
     ar1 = 2L,
     diag = 3L,
     spatial = 4L,
-    toep = 5L
+    toep = 5L,
+    fixed_cov = 6L
 )
 
 .sep_dispatch_code <- c(corr_matrix_product = 1L)
@@ -656,6 +665,7 @@ parseNumLevels <- function(levels) {
     builder_kind <- vapply(regs, `[[`, character(1), "builder")
     scale_kind <- vapply(regs, function(x) x$scale$kind, character(1))
     distance_info <- .sep_distance_info(regs, spec, dims)
+    cov_info <- .sep_fixed_cov_info(regs, spec, dims)
 
     list(
         dims = dims,
@@ -671,6 +681,8 @@ parseNumLevels <- function(levels) {
         theta_block_lengths = theta_layout$length,
         dist_starts = distance_info$starts,
         dists = distance_info$dists,
+        fixed_cov_starts = cov_info$starts,
+        fixed_covs = cov_info$covs,
         ntheta = as.integer(ntheta)
     )
 }
@@ -713,8 +725,8 @@ parseNumLevels <- function(levels) {
     ##   separable(us(0 + role) %x% ar1(0 + day) | group, scale = us(0 + role))
     ##
     ## into an internal product-design representation.  Margins may contain
-    ## multiple no-intercept columns; the current backend supports products of
-    ## correlation-matrix margins.
+    ## multiple no-intercept columns; the current backend supports registered
+    ## margins that can be represented as marginal SDs and correlations.
     if (!is.call(bar_expr) || !identical(.sep_call_name(bar_expr), "|") ||
         length(bar_expr) != 3L) {
         stop("separable() product syntax must look like ",
@@ -801,6 +813,84 @@ parseNumLevels <- function(levels) {
     X
 }
 
+.sep_eval_extra <- function(expr, fr, env) {
+    tryCatch(eval(expr, envir = fr, enclos = env),
+             error = function(e) {
+                 stop("can't evaluate separable() margin argument ",
+                      sQuote(.sep_deparse(expr)), call. = FALSE)
+             })
+}
+
+.sep_check_cov_arg <- function(x, cnms, expr, struc, env) {
+    if (!is.matrix(x) || !is.numeric(x)) {
+        stop("separable() ", struc, "() margin expects a numeric matrix ",
+             "extra argument.", call. = FALSE)
+    }
+    if (nrow(x) != ncol(x)) {
+        stop("separable() ", struc, "() margin covariance matrix must be square.",
+             call. = FALSE)
+    }
+    if (nrow(x) != length(cnms)) {
+        stop("separable() ", struc, "() margin covariance matrix has ",
+             "dimension ", nrow(x), ", but the margin has ", length(cnms),
+             " columns.", call. = FALSE)
+    }
+    if (identical(struc, "propto")) {
+        rn <- rownames(x)
+        cn <- colnames(x)
+        if (is.null(rn) && is.null(cn)) {
+            stop("row or column names of propto matrix are required",
+                 call. = FALSE)
+        }
+        if (!is.null(rn) && !is.null(cn) && !identical(rn, cn)) {
+            stop("row and column names of propto matrix do not match",
+                 call. = FALSE)
+        }
+        mat_names <- if (is.null(cn)) rn else cn
+        if (!identical(mat_names, cnms)) {
+            labs <- attr(stats::terms(.sep_margin_formula(expr, env)),
+                         "term.labels")
+            prefixed <- paste0(labs, mat_names)
+            if (!identical(prefixed, cnms)) {
+                stop("column or row names of the propto matrix do not match ",
+                     "the separable() margin columns.", call. = FALSE)
+            }
+        }
+    }
+    x
+}
+
+.sep_resolve_margin_payloads <- function(margins, Xlist, fr, env) {
+    payloads <- vector("list", nrow(margins))
+    for (i in seq_len(nrow(margins))) {
+        reg <- .sep_margin_registry[[margins$struc[i]]]
+        cov_args <- reg$extra$cov_args
+        if (!length(cov_args)) next
+        payloads[[i]] <- lapply(cov_args, function(j) {
+            .sep_check_cov_arg(.sep_eval_extra(margins$extra[[i]][[j]], fr, env),
+                               colnames(Xlist[[i]]), margins$expr[[i]],
+                               margins$struc[i], env)
+        })
+    }
+    payloads
+}
+
+.sep_fixed_cov_info <- function(regs, spec, dims) {
+    starts <- rep.int(-1L, length(dims))
+    covs <- numeric()
+    for (i in seq_along(regs)) {
+        if (!identical(regs[[i]]$builder, "fixed_cov")) next
+        cov <- spec$margin_payloads[[i]][[1]]
+        if (is.null(cov) || nrow(cov) != dims[[i]] || ncol(cov) != dims[[i]]) {
+            stop("separable() fixed covariance margin metadata does not match ",
+                 "the product design.")
+        }
+        starts[[i]] <- length(covs)
+        covs <- c(covs, as.vector(cov))
+    }
+    list(starts = starts, covs = covs)
+}
+
 .sep_sparse_rows <- function(X, n) {
     X <- methods::as(X, "TsparseMatrix")
     if (!length(X@x)) {
@@ -860,6 +950,7 @@ parseNumLevels <- function(levels) {
 
     spec$dims <- dims
     spec$margin_cnms <- lapply(Xlist, colnames)
+    spec$margin_payloads <- .sep_resolve_margin_payloads(margins, Xlist, fr, env)
     spec$cnms <- cnms
     list(Zt = Zt, cnms = cnms, spec = spec)
 }
