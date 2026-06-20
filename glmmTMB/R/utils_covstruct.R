@@ -256,11 +256,7 @@ parseNumLevels <- function(levels) {
         n_fun <- if (is.function(n)) n else function(d) n
         list(name = name, n = function(d) as.integer(n_fun(d)))
     }, nms, blocks)
-    n_theta <- function(d) {
-        sum(vapply(blocks, function(x) x$n(d), integer(1)))
-    }
-    list(blocks = blocks,
-         n_theta = n_theta)
+    list(blocks = blocks)
 }
 
 .sep_scale <- function(kind = c("none", "homogeneous", "heterogeneous"),
@@ -291,7 +287,7 @@ parseNumLevels <- function(levels) {
         is.null(scale$can_scale) || is.null(scale$can_auto_scale)) {
         stop("Malformed separable() scale contract for ", code)
     }
-    if (!is.function(theta$n_theta) || is.null(theta$blocks)) {
+    if (is.null(theta$blocks)) {
         stop("Malformed separable() theta contract for ", code)
     }
     if (is.null(metadata$needs_dist) || is.null(metadata$dist_coord_dim)) {
@@ -305,15 +301,7 @@ parseNumLevels <- function(levels) {
         builder = builder,
         scale = scale,
         theta = theta,
-        metadata = metadata,
-        builder_kind = builder,
-        scale_kind = scale$kind,
-        needs_dist = metadata$needs_dist,
-        dist_coord_dim = metadata$dist_coord_dim,
-        can_scale = scale$can_scale,
-        can_auto_scale = scale$can_auto_scale,
-        n_scale = scale$n,
-        n_theta = theta$n_theta
+        metadata = metadata
     )
 }
 
@@ -398,7 +386,7 @@ parseNumLevels <- function(levels) {
 )
 
 .sep_dispatch <- function(regs) {
-    kinds <- vapply(regs, `[[`, character(1), "builder_kind")
+    kinds <- vapply(regs, `[[`, character(1), "builder")
     if (!all(kinds %in% names(.sep_builder_kind_code))) return(NA_character_)
     "corr_matrix_product"
 }
@@ -421,8 +409,9 @@ parseNumLevels <- function(levels) {
 
 .sep_scale_info <- function(margins, regs, scale = NULL) {
     ## Resolve how absolute SD parameters enter the separable covariance.
-    can_scale <- vapply(regs, `[[`, logical(1), "can_scale")
-    can_auto_scale <- vapply(regs, `[[`, logical(1), "can_auto_scale")
+    can_scale <- vapply(regs, function(x) x$scale$can_scale, logical(1))
+    can_auto_scale <- vapply(regs, function(x) x$scale$can_auto_scale,
+                              logical(1))
     scale_candidates <- which(can_auto_scale)
     scale_mode <- if (is.null(scale)) "auto" else scale$mode
 
@@ -454,7 +443,7 @@ parseNumLevels <- function(levels) {
                  "for example scale = us(0 + member) when us(0 + member) ",
                  "is a margin.")
         }
-        if (!regs[[scale_margin]]$can_scale) {
+        if (!regs[[scale_margin]]$scale$can_scale) {
             stop("separable() scale = ", scale_spec$struc, "(",
                  scale_spec$var, ") selects a correlation-only margin. ",
                  "Use a scale-capable margin or scale = global().")
@@ -478,7 +467,8 @@ parseNumLevels <- function(levels) {
                  scale_spec$var[i], ") must match one of the specified ",
                  "margins.")
         }
-        scale_ok <- vapply(regs[scale_margin], `[[`, logical(1), "can_scale")
+        scale_ok <- vapply(regs[scale_margin],
+                            function(x) x$scale$can_scale, logical(1))
         if (!all(scale_ok)) {
             i <- which(!scale_ok)[[1]]
             stop("separable() scale = ", scale_spec$struc[i], "(",
@@ -505,7 +495,7 @@ parseNumLevels <- function(levels) {
     .sep_scale_info(margins, regs, scale)
     supported <- names(.sep_margin_registry)[
         vapply(.sep_margin_registry, function(x) {
-            x$builder_kind %in% names(.sep_builder_kind_code)
+            x$builder %in% names(.sep_builder_kind_code)
         }, logical(1))
     ]
     stop("separable() frontend parsed ", .sep_margin_label(margins),
@@ -514,7 +504,7 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_distance_info <- function(regs, spec, dims) {
-    needs_dist <- vapply(regs, `[[`, logical(1), "needs_dist")
+    needs_dist <- vapply(regs, function(x) x$metadata$needs_dist, logical(1))
     starts <- rep.int(-1L, length(dims))
     dists <- numeric()
     if (!any(needs_dist)) return(list(starts = starts, dists = dists))
@@ -533,7 +523,7 @@ parseNumLevels <- function(levels) {
             stop("separable() spatial margin metadata does not match the ",
                  "product design.")
         }
-        coord_dim <- regs[[i]]$dist_coord_dim
+        coord_dim <- regs[[i]]$metadata$dist_coord_dim
         if (!is.na(coord_dim) && ncol(coords) != coord_dim) {
             stop("'", regs[[i]]$code, "' separable() margins are for ",
                  coord_dim, "D coordinates only.")
@@ -567,7 +557,7 @@ parseNumLevels <- function(levels) {
     }
     for (i in seq_along(regs)) {
         if (i %in% scale_info$margin) {
-            add_block(i - 1L, "scale", regs[[i]]$n_scale(dims[[i]]))
+            add_block(i - 1L, "scale", regs[[i]]$scale$n(dims[[i]]))
         }
         for (block in regs[[i]]$theta$blocks) {
             add_block(i - 1L, block$name, block$n(dims[[i]]))
@@ -612,8 +602,8 @@ parseNumLevels <- function(levels) {
 
     theta_layout <- .sep_theta_block_layout(regs, dims, scale_info)
     ntheta <- sum(theta_layout$length)
-    builder_kind <- vapply(regs, `[[`, character(1), "builder_kind")
-    scale_kind <- vapply(regs, `[[`, character(1), "scale_kind")
+    builder_kind <- vapply(regs, `[[`, character(1), "builder")
+    scale_kind <- vapply(regs, function(x) x$scale$kind, character(1))
     distance_info <- .sep_distance_info(regs, spec, dims)
 
     list(
@@ -630,10 +620,7 @@ parseNumLevels <- function(levels) {
         theta_block_lengths = theta_layout$length,
         dist_starts = distance_info$starts,
         dists = distance_info$dists,
-        ntheta = as.integer(ntheta),
-        builder_kind = builder_kind,
-        margins = margins,
-        scale = spec$scale
+        ntheta = as.integer(ntheta)
     )
 }
 

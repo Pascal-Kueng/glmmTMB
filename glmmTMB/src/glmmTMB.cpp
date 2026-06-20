@@ -631,35 +631,32 @@ sep_margin_spec separable_margin_spec(per_term_info<Type>& term, int m) {
 struct sep_theta_block {
   int start;
   int length;
-  bool found;
 };
 
 template <class Type>
-sep_theta_block separable_theta_block(per_term_info<Type>& term, int margin,
-				      int kind, bool required = true) {
+sep_theta_block separable_theta_block(per_term_info<Type>& term,
+				      int margin, int kind) {
   sep_theta_block out;
-  out.start = 0;
+  out.start = -1;
   out.length = 0;
-  out.found = false;
-
   for (int i = 0; i < term.sepThetaBlockStarts.size(); i++) {
     if (term.sepThetaBlockMargins(i) == margin &&
 	term.sepThetaBlockKinds(i) == kind) {
-      if (out.found)
+      if (out.start >= 0)
 	error("duplicate separable theta block");
       out.start = term.sepThetaBlockStarts(i);
       out.length = term.sepThetaBlockLengths(i);
-      out.found = true;
     }
   }
-  if (required && !out.found)
+  if (out.start < 0)
     error("missing separable theta block");
   return out;
 }
 
 template <class Type>
 Type separable_theta_scalar(const vector<Type>& theta,
-			    const sep_theta_block& block) {
+			    per_term_info<Type>& term, int margin, int kind) {
+  sep_theta_block block = separable_theta_block(term, margin, kind);
   if (block.length != 1)
     error("separable theta block has wrong length");
   return theta(block.start);
@@ -667,8 +664,10 @@ Type separable_theta_scalar(const vector<Type>& theta,
 
 template <class Type>
 vector<Type> separable_theta_vector(const vector<Type>& theta,
-				    const sep_theta_block& block,
+				    per_term_info<Type>& term,
+				    int margin, int kind,
 				    int length) {
+  sep_theta_block block = separable_theta_block(term, margin, kind);
   if (block.length != length)
     error("separable theta block has wrong length");
   return theta.segment(block.start, block.length);
@@ -702,14 +701,14 @@ void parse_separable_margin_sd(const sep_margin_spec& margin,
   margin_sd.fill(Type(1));
   if (!margin.scale) return;
 
-  sep_theta_block block =
-    separable_theta_block(term, margin.index, scale_theta_block);
   switch (margin.scale_kind) {
   case homogeneous_sep_scale_kind:
-    margin_sd.fill(exp(separable_theta_scalar(theta, block)));
+    margin_sd.fill(exp(separable_theta_scalar(
+      theta, term, margin.index, scale_theta_block)));
     break;
   case heterogeneous_sep_scale_kind: {
-    vector<Type> logsd = separable_theta_vector(theta, block, margin.n);
+    vector<Type> logsd = separable_theta_vector(
+      theta, term, margin.index, scale_theta_block, margin.n);
     margin_sd = exp(logsd);
     break;
   }
@@ -729,15 +728,15 @@ void parse_separable_dense_margin(const sep_margin_spec& margin,
     error("unsupported dense margin for separable covariance structure");
 
   parse_separable_margin_sd(margin, theta, term, margin_sd);
-  sep_theta_block corr_block =
-    separable_theta_block(term, margin.index, corr_theta_block);
-
   if (margin.code == cs_covstruct || margin.code == homcs_covstruct) {
     corr = compound_symmetry_corr(margin.n,
-				  separable_theta_scalar(theta, corr_block));
+				  separable_theta_scalar(theta, term,
+							 margin.index,
+							 corr_theta_block));
   } else {
     int n_corr = margin.n * (margin.n - 1) / 2;
-    us_corr_params = separable_theta_vector(theta, corr_block, n_corr);
+    us_corr_params = separable_theta_vector(theta, term, margin.index,
+					    corr_theta_block, n_corr);
   }
 }
 
@@ -765,10 +764,9 @@ void parse_separable_toep_margin(const sep_margin_spec& margin,
 
   parse_separable_margin_sd(margin, theta, term, margin_sd);
 
-  sep_theta_block corr_block =
-    separable_theta_block(term, margin.index, corr_theta_block);
   vector<Type> corr_params =
-    separable_theta_vector(theta, corr_block, margin.n - 1);
+    separable_theta_vector(theta, term, margin.index, corr_theta_block,
+			   margin.n - 1);
   corr_params = corr_params / sqrt(Type(1) + corr_params * corr_params);
   corr.resize(margin.n, margin.n);
   for (int i = 0; i < margin.n; i++)
@@ -809,13 +807,12 @@ void parse_separable_spatial_margin(const sep_margin_spec& margin,
 
   int theta0_kind = (margin.code == ou_covstruct) ?
     decay_theta_block : range_theta_block;
-  Type theta0 = separable_theta_scalar(
-    theta, separable_theta_block(term, margin.index, theta0_kind));
+  Type theta0 = separable_theta_scalar(theta, term, margin.index,
+				       theta0_kind);
   Type theta1 = Type(0);
   if (margin.code == mat_covstruct) {
-    theta1 = separable_theta_scalar(
-      theta, separable_theta_block(term, margin.index,
-				   smoothness_theta_block));
+    theta1 = separable_theta_scalar(theta, term, margin.index,
+				    smoothness_theta_block);
   }
 
   for (int i = 0; i < margin.n; i++) {
@@ -946,8 +943,8 @@ void parse_separable_ar1_margin(const sep_margin_spec& margin,
     error("unsupported AR1 margin for separable covariance structure");
 
   parse_separable_margin_sd(margin, theta, term, margin_sd);
-  Type corr_transf = separable_theta_scalar(
-    theta, separable_theta_block(term, margin.index, corr_theta_block));
+  Type corr_transf = separable_theta_scalar(theta, term, margin.index,
+					    corr_theta_block);
   phi = parse_ar1_phi(corr_transf);
 }
 
@@ -1001,11 +998,6 @@ void simulate_separable_product(array<Type> &U, const vector<Type>& cell_sd,
       error("unknown simcode");
     }
   }
-}
-
-bool is_separable_corr_matrix_kind(int kind) {
-  return kind == dense_corr_builder || kind == ar1_builder ||
-    kind == diag_builder || kind == spatial_builder || kind == toep_builder;
 }
 
 template <class Type>
@@ -1077,17 +1069,10 @@ sep_corr_product_pars<Type> parse_separable_corr_product(const vector<Type>& the
   sep_corr_product_pars<Type> out;
   check_separable_theta_layout(term, theta.size());
   int n_margin = term.sepDims.size();
-  for (int m = 0; m < n_margin; m++) {
-    int kind = term.sepBuilderKinds(m);
-    if (!is_separable_corr_matrix_kind(kind))
-      error("unsupported separable margin for correlation-matrix evaluator");
-  }
-
   Type global_sd = Type(1);
   if (term.sepScaleMode(0) == global_sep_scale) {
-    sep_theta_block block =
-      separable_theta_block(term, -1, global_scale_theta_block);
-    global_sd = exp(separable_theta_scalar(theta, block));
+    global_sd = exp(separable_theta_scalar(theta, term, -1,
+					   global_scale_theta_block));
   }
 
   vector<vector<Type> > margin_sd(n_margin);
