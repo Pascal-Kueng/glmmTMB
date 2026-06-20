@@ -313,16 +313,45 @@ parseNumLevels <- function(levels) {
          dist_coord_dim = if (needs_dist) as.integer(dist_coord_dim) else NA_integer_)
 }
 
-.sep_extra <- function(n = 0L, frame_args = integer(), cov_args = integer()) {
+.sep_payload <- function(kind, arg, frame = FALSE) {
+    if (!is.character(kind) || length(kind) != 1L || !nzchar(kind) ||
+        length(arg) != 1L || is.na(arg) || arg < 1L ||
+        !is.logical(frame) || length(frame) != 1L || is.na(frame)) {
+        stop("Malformed separable() payload contract.")
+    }
+    list(kind = kind, arg = as.integer(arg), frame = frame)
+}
+
+.sep_extra <- function(n = 0L, frame_args = integer(), payloads = list(),
+                       cov_args = integer()) {
     n <- as.integer(n)
     frame_args <- as.integer(frame_args)
-    cov_args <- as.integer(cov_args)
+    if (length(cov_args)) {
+        payloads <- c(payloads, lapply(as.integer(cov_args), function(i) {
+            .sep_payload("cov_matrix", i)
+        }))
+    }
+    if (length(payloads) && !is.list(payloads[[1]])) {
+        payloads <- list(payloads)
+    }
+    payloads <- lapply(payloads, function(x) {
+        if (is.null(x$kind) || is.null(x$arg) || is.null(x$frame)) {
+            stop("Malformed separable() payload contract.")
+        }
+        .sep_payload(x$kind, x$arg, x$frame)
+    })
     if (length(n) != 1L || n < 0L ||
-        any(frame_args < 1L | frame_args > n) ||
-        any(cov_args < 1L | cov_args > n)) {
+        any(frame_args < 1L | frame_args > n)) {
         stop("Malformed separable() extra-argument contract.")
     }
-    list(n = n, frame_args = frame_args, cov_args = cov_args)
+    payload_args <- vapply(payloads, `[[`, integer(1), "arg")
+    if (any(payload_args < 1L | payload_args > n)) {
+        stop("Malformed separable() payload contract.")
+    }
+    frame_args <- sort(unique(c(frame_args,
+                                payload_args[vapply(payloads, `[[`,
+                                                     logical(1), "frame")])))
+    list(n = n, frame_args = frame_args, payloads = payloads)
 }
 
 .sep_margin_entry <- function(code, builder, scale, theta,
@@ -340,7 +369,7 @@ parseNumLevels <- function(levels) {
         stop("Malformed separable() metadata contract for ", code)
     }
     if (is.null(extra$n) || is.null(extra$frame_args) ||
-        is.null(extra$cov_args)) {
+        is.null(extra$payloads)) {
         stop("Malformed separable() extra-argument contract for ", code)
     }
     if (!scale$kind %in% c("none", "homogeneous", "heterogeneous")) {
@@ -355,6 +384,11 @@ parseNumLevels <- function(levels) {
         extra = extra
     )
 }
+
+.sep_cov_matrix_extra <- .sep_extra(
+    n = 1L,
+    payloads = .sep_payload("cov_matrix", 1L)
+)
 
 .sep_margin_registry <- list(
     diag = .sep_margin_entry("diag", "diag",
@@ -403,11 +437,11 @@ parseNumLevels <- function(levels) {
     propto = .sep_margin_entry("propto", "fixed_cov",
                                .sep_scale("homogeneous", 1L),
                                .sep_theta(),
-                               extra = .sep_extra(n = 1L, cov_args = 1L)),
+                               extra = .sep_cov_matrix_extra),
     equalto = .sep_margin_entry("equalto", "fixed_cov",
                                 .sep_scale("none", fixed = TRUE),
                                 .sep_theta(),
-                               extra = .sep_extra(n = 1L, cov_args = 1L))
+                                extra = .sep_cov_matrix_extra)
 )
 
 ## Each supported separable builder kind must have a C++ margin builder that
@@ -837,7 +871,7 @@ parseNumLevels <- function(levels) {
              })
 }
 
-.sep_check_cov_arg <- function(x, cnms, expr, struc, env) {
+.sep_check_cov_payload <- function(x, cnms, expr, struc, env) {
     if (!is.matrix(x) || !is.numeric(x)) {
         stop("separable() ", struc, "() margin expects a numeric matrix ",
              "extra argument.", call. = FALSE)
@@ -876,17 +910,24 @@ parseNumLevels <- function(levels) {
     x
 }
 
+.sep_check_payload <- function(payload, value, cnms, expr, struc, env) {
+    switch(payload$kind,
+           cov_matrix = .sep_check_cov_payload(value, cnms, expr, struc, env),
+           stop("Unsupported separable() payload kind: ", payload$kind,
+                call. = FALSE))
+}
+
 .sep_resolve_margin_payloads <- function(margins, Xlist, fr, env) {
     payloads <- vector("list", nrow(margins))
     for (i in seq_len(nrow(margins))) {
         reg <- .sep_margin_registry[[margins$struc[i]]]
-        cov_args <- reg$extra$cov_args
-        if (!length(cov_args)) next
-        payloads[[i]] <- lapply(cov_args, function(j) {
-            .sep_check_cov_arg(.sep_eval_extra(margins$extra[[i]][[j]], fr, env),
-                               colnames(Xlist[[i]]), margins$expr[[i]],
-                               margins$struc[i], env)
-        })
+        specs <- reg$extra$payloads
+        if (!length(specs)) next
+        payloads[[i]] <- setNames(lapply(specs, function(payload) {
+            value <- .sep_eval_extra(margins$extra[[i]][[payload$arg]], fr, env)
+            .sep_check_payload(payload, value, colnames(Xlist[[i]]),
+                               margins$expr[[i]], margins$struc[i], env)
+        }), vapply(specs, `[[`, character(1), "kind"))
     }
     payloads
 }
@@ -896,7 +937,7 @@ parseNumLevels <- function(levels) {
     covs <- numeric()
     for (i in seq_along(regs)) {
         if (!identical(regs[[i]]$builder, "fixed_cov")) next
-        cov <- spec$margin_payloads[[i]][[1]]
+        cov <- spec$margin_payloads[[i]][["cov_matrix"]]
         if (is.null(cov) || nrow(cov) != dims[[i]] || ncol(cov) != dims[[i]]) {
             stop("separable() fixed covariance margin metadata does not match ",
                  "the product design.")
