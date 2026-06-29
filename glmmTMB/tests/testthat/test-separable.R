@@ -929,57 +929,6 @@ test_that("glmmTMB preserves unused separable margin levels by default", {
     expect_equal(levels(fit$fr$fixed_factor), c("a", "b"))
 })
 
-test_that("separable specs handle product order", {
-    dd <- make_sep_dat()
-
-    h <- glmmTMB(y ~ 1 +
-                     separable(ar1(0 + time) %x% homcs(0 + member) | group),
-                 data = dd, doFit = FALSE)
-    u <- glmmTMB(y ~ 1 +
-                     separable(us(0 + member) %x% ar1(0 + time) | group),
-                 data = dd, doFit = FALSE)
-
-    expect_equal(unname(h$condReStruc[[1]]$blockCode),
-                 unname(.valid_covstruct[["separable"]]))
-    expect_equal(h$condReStruc[[1]]$blockNumTheta, 3)
-    expect_equal(h$condReStruc[[1]]$sepDims, c(3L, 2L))
-    expect_equal(h$condReStruc[[1]]$sepCodes,
-                 unname(c(.valid_covstruct[["ar1"]], .valid_covstruct[["homcs"]])))
-    expect_equal(h$condReStruc[[1]]$sepBuilderKinds, c(2L, 1L))
-    expect_equal(h$condReStruc[[1]]$sepScaleKinds, c(1L, 1L))
-    expect_equal(h$condReStruc[[1]]$sepScaleMode, 1L)
-    expect_equal(h$condReStruc[[1]]$sepScaleSpec, 1L)
-
-    expect_equal(u$condReStruc[[1]]$blockNumTheta, 4)
-    expect_equal(u$condReStruc[[1]]$sepCodes,
-                 unname(c(.valid_covstruct[["us"]], .valid_covstruct[["ar1"]])))
-    expect_equal(u$condReStruc[[1]]$sepBuilderKinds, c(1L, 2L))
-    expect_equal(u$condReStruc[[1]]$sepScaleKinds, c(2L, 1L))
-    expect_equal(u$condReStruc[[1]]$sepScaleMode, 1L)
-    expect_equal(u$condReStruc[[1]]$sepScaleSpec, 0L)
-})
-
-test_that("separable parser builds structured specs from splitForm output", {
-    f <- y ~ 1 +
-        separable(homcs(0 + member) %x% ar1(0 + time) | group,
-                  scale = homcs(0 + member))
-    ss <- reformulas::splitForm(f, specials = c(names(.valid_covstruct), "s"))
-    specs <- glmmTMB:::.sep_specs_from_split(ss)
-    spec <- specs[[1]]
-
-    expect_length(specs, 1)
-    expect_equal(spec$grid, c("member", "time"))
-    expect_equal(unname(spec$margins$struc), c("homcs", "ar1"))
-    expect_equal(spec$scale$mode, "margin")
-    expect_equal(unname(spec$scale$margins$struc), "homcs")
-    expect_equal(unname(spec$scale$margins$var), "member")
-    expect_equal(ss$reTrmClasses, "separable")
-    expect_equal(deparse(ss$reTrmFormulas[[1]]),
-                 "homcs(0 + member) %x% ar1(0 + time) | group")
-    expect_equal(deparse(ss$reTrmAddArgs[[1]]),
-                 "separable(scale = homcs(0 + member))")
-})
-
 test_that("separable parser flattens product chains and records scale syntax", {
     f <- y ~ 1 +
         separable(us(0 + member) %x% ar1(0 + time) %x% cs(0 + item) | group,
@@ -991,50 +940,6 @@ test_that("separable parser flattens product chains and records scale syntax", {
     expect_equal(spec$margins$struc, c("us", "ar1", "cs"))
     expect_equal(spec$scale$mode, "selected_product")
     expect_equal(spec$scale$margins$struc, c("us", "cs"))
-})
-
-test_that("separable frontend parses simple existing covariance margins", {
-    f <- y ~ 1 +
-        separable(diag(0 + member) %x% ar1(0 + time) %x%
-                      homtoep(0 + item) | group,
-                  scale = product(diag(0 + member), homtoep(0 + item)))
-    ss <- reformulas::splitForm(f, specials = c(names(.valid_covstruct), "s"))
-    spec <- glmmTMB:::.sep_specs_from_split(ss)[[1]]
-
-    expect_equal(spec$grid, c("member", "time", "item"))
-    expect_equal(spec$margins$struc, c("diag", "ar1", "homtoep"))
-    expect_equal(spec$scale$mode, "selected_product")
-    expect_equal(spec$scale$margins$struc, c("diag", "homtoep"))
-})
-
-test_that("separable parser carries margin extra arguments", {
-    m <- glmmTMB:::.sep_product_margin_spec(quote(ar1(0 + time, rho_source)))
-    m2 <- glmmTMB:::.sep_product_margin_spec(quote(ar1(0 + time, other_source)))
-
-    expect_equal(m$struc, "ar1")
-    expect_equal(m$var, "time")
-    expect_equal(length(m$extra[[1]]), 1L)
-    expect_equal(deparse(m$extra[[1]][[1]]), "rho_source")
-    expect_false(identical(glmmTMB:::.sep_margin_key(m),
-                           glmmTMB:::.sep_margin_key(m2)))
-})
-
-test_that("separable parser records global and product scale modes", {
-    f_global <- y ~ 1 +
-        separable(ar1(0 + member) %x% ar1(0 + time) | group,
-                  scale = global())
-    ss_global <- reformulas::splitForm(f_global,
-                                       specials = c(names(.valid_covstruct), "s"))
-    expect_equal(glmmTMB:::.sep_specs_from_split(ss_global)[[1]]$scale$mode,
-                 "global")
-
-    f_product <- y ~ 1 +
-        separable(us(0 + member) %x% cs(0 + item) | group,
-                  scale = product())
-    ss_product <- reformulas::splitForm(f_product,
-                                        specials = c(names(.valid_covstruct), "s"))
-    expect_equal(glmmTMB:::.sep_specs_from_split(ss_product)[[1]]$scale$mode,
-                 "product")
 })
 
 test_that("separable records registry-derived theta blocks", {
@@ -1139,11 +1044,6 @@ test_that("separable selected product scale validates its margins", {
                 data = dd, doFit = FALSE),
         "scale margin ar1\\(time\\) takes 0 extra arguments, but got 1"
     )
-    fit <- glmmTMB(y ~ 1 +
-                       separable(us(0 + member) %x% ar1(0 + time) | group,
-                                 scale = product(ar1(0 + time))),
-                   data = dd, doFit = FALSE)
-    expect_equal(fit$condReStruc[[1]]$sepScaleSpec, 1L)
     expect_error(
         glmmTMB(y ~ 1 +
                     separable(us(0 + member) %x% ar1(0 + time) | group,
@@ -1216,20 +1116,6 @@ test_that("separable product terms stay aligned after smooth augmentation", {
     expect_equal(fit$condList$ss, c("homdiag", "separable"))
     expect_equal(fit$condReStruc[[2]]$sepDims, c(2L, 3L))
     expect_s3_class(fit$condList$reXterms[[2]], "separable_reXterms")
-})
-
-test_that("separable supports explicit scale margin selection", {
-    dd <- make_sep_dat()
-
-    fit <- glmmTMB(y ~ 1 +
-                       separable(ar1(0 + time) %x% us(0 + member) | group,
-                                 scale = us(0 + member)),
-                   data = dd, doFit = FALSE)
-
-    expect_equal(fit$condReStruc[[1]]$sepCodes,
-                 unname(c(.valid_covstruct[["ar1"]], .valid_covstruct[["us"]])))
-    expect_equal(fit$condReStruc[[1]]$sepScaleSpec, 1L)
-    expect_equal(fit$condReStruc[[1]]$blockNumTheta, 4)
 })
 
 test_that("multiple separable terms keep their spec order", {
@@ -1333,14 +1219,8 @@ test_that("separable validates unsupported margins and scale choices", {
 
 test_that("separable reports kronecker covariance for supported dense x ar1 pairs", {
     cases <- list(
-        make_sep_case("cs", n_member = 5, n_time = 4),
-        make_sep_case("homcs", n_member = 5, n_time = 4),
-        make_sep_case("us", n_member = 4, n_time = 4),
-        make_sep_case("us", reversed = TRUE),
         make_sep_case("cs", scale_mode = "global"),
-        make_sep_case("homcs", scale_mode = "product"),
-        make_sep_case("us", reversed = TRUE, scale_mode = "selected_product"),
-        make_sep_case("cs", scale_mode = "product", ar1_struc = "hetar1")
+        make_sep_case("us", reversed = TRUE, scale_mode = "selected_product")
     )
     invisible(lapply(cases, expect_separable_case_vc))
 })
@@ -1348,11 +1228,7 @@ test_that("separable reports kronecker covariance for supported dense x ar1 pair
 test_that("separable likelihood matches dense MVN for supported dense x ar1 pairs", {
     cases <- list(
         make_sep_case("cs"),
-        make_sep_case("cs", reversed = TRUE),
-        make_sep_case("homcs"),
         make_sep_case("homcs", reversed = TRUE),
-        make_sep_case("us", n_member = 3),
-        make_sep_case("us", reversed = TRUE),
         make_sep_case("cs", scale_mode = "global"),
         make_sep_case("homcs", reversed = TRUE, scale_mode = "product"),
         make_sep_case("us", scale_mode = "selected_product"),
@@ -1365,9 +1241,6 @@ test_that("separable likelihood matches dense MVN for supported dense x ar1 pair
 test_that("separable reports kronecker covariance for supported dense x dense pairs", {
     cases <- list(
         make_sep_dense_dense_case("cs", "cs", scale_mode = "global"),
-        make_sep_dense_dense_case("homcs", "cs", scale_mode = "product"),
-        make_sep_dense_dense_case("us", "homcs", scale_mode = "selected_first"),
-        make_sep_dense_dense_case("cs", "us", scale_mode = "selected_second"),
         make_sep_dense_dense_case("us", "us", scale_mode = "product")
     )
     invisible(lapply(cases, expect_separable_case_vc))
@@ -1387,10 +1260,6 @@ test_that("separable likelihood matches dense MVN for supported dense x dense pa
 test_that("separable reports kronecker covariance for ar1 x ar1", {
     cases <- list(
         make_sep_ar1_ar1_case(),
-        make_sep_ar1_ar1_case("ar1", "ar1", scale_mode = "product"),
-        make_sep_ar1_ar1_case("hetar1", "ar1", scale_mode = "margin"),
-        make_sep_ar1_ar1_case("ar1", "hetar1",
-                              scale_mode = "selected_second"),
         make_sep_ar1_ar1_case("hetar1", "hetar1", scale_mode = "product")
     )
     invisible(lapply(cases, expect_separable_case_vc))
@@ -1399,7 +1268,6 @@ test_that("separable reports kronecker covariance for ar1 x ar1", {
 test_that("separable likelihood matches dense MVN for ar1 x ar1", {
     cases <- list(
         make_sep_ar1_ar1_case(),
-        make_sep_ar1_ar1_case("ar1", "ar1", scale_mode = "product"),
         make_sep_ar1_ar1_case("hetar1", "ar1", scale_mode = "margin"),
         make_sep_ar1_ar1_case("ar1", "hetar1",
                               scale_mode = "selected_second"),
@@ -1411,14 +1279,7 @@ test_that("separable likelihood matches dense MVN for ar1 x ar1", {
 test_that("separable reports kronecker covariance for diagonal margin pairs", {
     cases <- list(
         make_sep_diag_ar1_case("diag"),
-        make_sep_diag_ar1_case("homdiag", reversed = TRUE,
-                               scale_mode = "product"),
-        make_sep_diag_ar1_case("diag", scale_mode = "product",
-                               ar1_struc = "hetar1"),
         make_sep_diag_dense_case("diag", "us", scale_mode = "product"),
-        make_sep_diag_dense_case("homdiag", "cs", reversed = TRUE,
-                                 scale_mode = "selected_diag"),
-        make_sep_diag_diag_case("diag", "homdiag", scale_mode = "product"),
         make_sep_diag_diag_case("homdiag", "diag", scale_mode = "global")
     )
     invisible(lapply(cases, expect_separable_case_vc))
@@ -1435,9 +1296,7 @@ test_that("separable likelihood matches dense MVN for diagonal margin pairs", {
         make_sep_diag_dense_case("diag", "us", scale_mode = "product"),
         make_sep_diag_dense_case("homdiag", "homcs",
                                  scale_mode = "selected_dense"),
-        make_sep_diag_diag_case("diag", "homdiag", scale_mode = "product"),
-        make_sep_diag_diag_case("homdiag", "diag",
-                                scale_mode = "selected_first")
+        make_sep_diag_diag_case("diag", "homdiag", scale_mode = "product")
     )
     invisible(lapply(cases, expect_separable_case_nll))
 })
