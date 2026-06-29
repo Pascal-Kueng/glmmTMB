@@ -319,11 +319,11 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
     full_cor <- rep(full_cor, length.out = nREtot)
     fc_list <- split(full_cor, factor(rep(1:3, times = nRE), levels=1:3))
     condReStruc <- with(condList, getReStruc(reTrms, ss, aa, reXterms, fr,
-                                             fc_list[[1]], sepSpecs = sepSpecs))
+                                             fc_list[[1]]))
     ziReStruc <- with(ziList, getReStruc(reTrms, ss, aa, reXterms, fr,
-                                         fc_list[[2]], sepSpecs = sepSpecs))
+                                         fc_list[[2]]))
     dispReStruc <- with(dispList, getReStruc(reTrms, ss, aa, reXterms, fr,
-                                             fc_list[[3]], sepSpecs = sepSpecs))
+                                             fc_list[[3]]))
     
     grpVar <- with(condList, getGrpVar(reTrms$flist))
 
@@ -707,9 +707,6 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         }
     }
 
-    ## random-effects model frame (for predvars)
-    sepSpecs <- list()
-
     if (!has_re && !has_smooths) {
         reTrms <- reXterms <- NULL
         Z <- new("dgCMatrix",Dim=c(as.integer(nobs),0L)) ## matrix(0, ncol=0, nrow=nobs)
@@ -721,10 +718,10 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         if (!ranOK) stop("no random effects allowed in ", type, " term")
 
         sep_pos <- which(ss$reTrmClasses == "separable")
-        sepSpecs <- vector("list", length(ss$reTrmClasses))
+        sep_specs <- vector("list", length(ss$reTrmClasses))
         if (length(sep_pos)) {
             for (i in sep_pos) {
-                sepSpecs[[i]] <- .sep_make_product_spec_from_split(
+                sep_specs[[i]] <- .sep_make_product_spec_from_split(
                     ss$reTrmFormulas[[i]], ss$reTrmAddArgs[[i]])
             }
         }
@@ -824,7 +821,7 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
                 }
             }
             for (i in sep_pos) {
-                spec <- sepSpecs[[i]]
+                spec <- sep_specs[[i]]
                 group <- .sep_group_factor(spec$group, fr, environment(formula))
                 repl <- .sep_build_product_reterm(spec, fr, group,
                                                   environment(formula))
@@ -843,7 +840,7 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
                 augReTrms$cnms[[i]] <- repl$cnms
                 names(augReTrms$Ztlist)[i] <- group_name
                 names(augReTrms$cnms)[i] <- group_name
-                sepSpecs[[i]] <- repl$spec
+                sep_specs[[i]] <- repl$spec
             }
             attr(augReTrms$flist, "assign") <- avec
             ## reconstitute other pieces
@@ -863,7 +860,7 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         ##    document potential issues
         ## Changed from getting rank to extracting additional argument for propto
         get_arg <- function(v, cls, i) {
-          if (cls == "separable") return(sepSpecs[[i]])
+          if (cls == "separable") return(sep_specs[[i]])
           if (length(v) == 1) return(NA_real_)
           payload <- v[[2]]
           ## rabbit-hole alert. Try to evaluate payload first in model frame,
@@ -903,7 +900,7 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         ## Here, we're using the fact that the ...AddArgs stuff is still in an unevaluated form
         drop_s <- function(f, a, cls, i) {
             if (identical(a[[1]], as.symbol('s'))) return(NA)
-            if (cls == "separable") return(.sep_reXterms(sepSpecs[[i]],
+            if (cls == "separable") return(.sep_reXterms(aa[[i]],
                                                           environment(formula)))
             termsfun(f)
         }
@@ -939,7 +936,7 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
     ## list(fr = fr, X = X, reTrms = reTrms, family = family, formula = formula,
     ##      wmsgs = c(Nlev = wmsgNlev, Zdims = wmsgZdims, Zrank = wmsgZrank))
 
-    namedList(X, Z, reTrms, ss, aa, terms, offset, reXterms, sepSpecs)
+    namedList(X, Z, reTrms, ss, aa, terms, offset, reXterms)
 }
 
 ##' Get theta parameterisation of a covariance structure
@@ -1028,7 +1025,6 @@ getGrpVar <- function(x)
 ##' @param reXterms terms objects corresponding to each RE term
 ##' @param fr model frame
 ##' @param aa additional arguments (i.e. rank, or var-cov matrix)
-##' @param sepSpecs internal separable covariance specifications
 ##' @inheritParams glmmTMBControl
 ##' @return a list
 ##' \item{blockNumTheta}{number of variance covariance parameters per term}
@@ -1048,7 +1044,7 @@ getGrpVar <- function(x)
 ##' @importFrom stats setNames dist .getXlevels
 ##' @export
 getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
-                       full_cor=NULL, sepSpecs=NULL) {
+                       full_cor=NULL) {
 
     ## information from ReTrms is contained in cnms, flist elements
     ## cnms: list of column-name vectors per term
@@ -1082,8 +1078,7 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
     blkrank <- mapply(getRank, ss, aa)
     sepInfo <- vector("list", length(ss))
     for (i in which(ss == "separable")) {
-        sepInfo[[i]] <- .sep_restruc_info(.sep_spec_from_id_or_value(aa[[i]],
-                                                                      sepSpecs),
+        sepInfo[[i]] <- .sep_restruc_info(aa[[i]],
                                            reTrms$cnms[[i]], blksize[i])
     }
     

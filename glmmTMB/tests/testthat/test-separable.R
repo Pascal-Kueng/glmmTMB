@@ -24,6 +24,13 @@ fit_fixed_theta <- function(form, dd, theta) {
             map = list(theta = factor(rep(NA, length(theta)))))
 }
 
+fit_fixed_sep <- function(dd, theta = c(log(1), qlogis((0.2 + 1) / 2),
+                                        ar1_to_theta(0.3))) {
+    fit_fixed_theta(
+        y ~ 1 + separable(homcs(0 + member) %x% ar1(0 + time) | group),
+        dd, theta)
+}
+
 joint_nll_at <- function(form, dd, theta, b, sigma = 2) {
     fit <- glmmTMB(form, data = dd,
                    start = list(beta = 0, betadisp = log(sigma),
@@ -115,6 +122,54 @@ test_that("separable parser flattens product chains and records scale syntax", {
     expect_equal(spec$margins$struc, c("us", "ar1", "cs"))
     expect_equal(spec$scale$mode, "selected_product")
     expect_equal(spec$scale$margins$struc, c("us", "cs"))
+})
+
+test_that("separable margin registry preserves supported contracts", {
+    reg <- glmmTMB:::.sep_margin_registry
+    margin_names <- c("diag", "homdiag", "cs", "homcs", "us", "ar1",
+                      "hetar1", "ou", "exp", "gau", "mat", "toep",
+                      "homtoep", "propto", "equalto")
+    payload_summary <- function(x) {
+        paste(vapply(x$extra$payloads, function(p) {
+            paste(p$kind, p$arg, p$frame, sep = ":")
+        }, character(1)), collapse = ",")
+    }
+    theta_summary <- function(x) {
+        paste(vapply(x$theta$blocks, function(b) {
+            paste(b$name, b$n(4L), sep = ":")
+        }, character(1)), collapse = ",")
+    }
+
+    expect_equal(names(reg), margin_names)
+    expect_equal(unname(vapply(reg, `[[`, character(1), "code")),
+                 margin_names)
+    expect_true(all(margin_names %in% names(glmmTMB:::.valid_covstruct)))
+    expect_equal(unname(vapply(reg, function(x) x$scale$kind, character(1))),
+                 c("heterogeneous", "homogeneous", "heterogeneous",
+                   "homogeneous", "heterogeneous", "homogeneous",
+                   "heterogeneous", rep("homogeneous", 4), "heterogeneous",
+                   "homogeneous", "homogeneous", "none"))
+    expect_equal(unname(vapply(reg, function(x) x$scale$can_auto_scale,
+                               logical(1))),
+                 c(TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE,
+                   rep(TRUE, 7), FALSE))
+    expect_equal(unname(vapply(reg, function(x) x$scale$fixed_scale,
+                               logical(1))),
+                 c(rep(FALSE, 14), TRUE))
+    expect_equal(unname(vapply(reg, function(x) x$scale$n(4L), integer(1))),
+                 c(4L, 1L, 4L, 1L, 4L, 1L, 4L, rep(1L, 4), 4L,
+                   1L, 1L, 0L))
+    expect_equal(unname(vapply(reg, theta_summary, character(1))),
+                 c("", "", "corr:1", "corr:1", "corr:6", "corr:1",
+                   "corr:1", "decay:1", "range:1", "range:1",
+                   "range:1,smoothness:1", "corr:3", "corr:3", "", ""))
+    expect_equal(unname(vapply(reg, function(x) x$metadata$dist_coord_dim,
+                               integer(1))),
+                 c(rep(NA_integer_, 7), 1L, rep(NA_integer_, 7)))
+    expect_equal(unname(vapply(reg, function(x) x$extra$n, integer(1))),
+                 c(rep(0L, 13), 1L, 1L))
+    expect_equal(unname(vapply(reg, payload_summary, character(1))),
+                 c(rep("", 13), "cov_matrix:1:FALSE", "cov_matrix:1:FALSE"))
 })
 
 test_that("separable dense x ar1 matches dense MVN", {
@@ -247,6 +302,19 @@ test_that("separable supports three-margin products", {
 
     expect_equal(fit$condReStruc[[1]]$sepDims, c(2L, 2L, 2L))
     expect_equal(fit$condReStruc[[1]]$blockNumTheta, 4L)
+
+    inner <- with(dd, as.integer(member) +
+                      (as.integer(time) - 1L) * 2L +
+                      (as.integer(item) - 1L) * 4L)
+    expected <- Matrix::sparseMatrix(
+        i = (as.integer(dd$group) - 1L) * 8L + inner,
+        j = seq_len(nrow(dd)),
+        x = 1,
+        dims = c(16L, nrow(dd))
+    )
+    expect_equal(as.matrix(fit$condList$reTrms$Zt),
+                 as.matrix(expected),
+                 check.attributes = FALSE)
 })
 
 test_that("separable product syntax supports multi-column dense margins", {
@@ -291,45 +359,48 @@ test_that("separable preserves user-facing formulas", {
                                                  ar1(0 + time) | group),
                    data = dd, doFit = FALSE)
 
-    txt <- paste(deparse(fit$call$formula), collapse = " ")
-    ztxt <- paste(deparse(fit$call$ziformula), collapse = " ")
-    dtxt <- paste(deparse(fit$call$dispformula), collapse = " ")
-    expect_match(txt, "homcs\\(0 \\+ member\\)")
-    expect_match(ztxt, "homcs\\(0 \\+ member\\)")
-    expect_match(dtxt, "homcs\\(0 \\+ member\\)")
-    expect_false(grepl("data.frame", paste(txt, ztxt, dtxt), fixed = TRUE))
+    form_txt <- vapply(c("formula", "ziformula", "dispformula"),
+                       function(x) paste(deparse(fit$call[[x]]), collapse = " "),
+                       character(1))
+    expect_true(all(grepl("homcs\\(0 \\+ member\\)", form_txt)))
+    expect_false(grepl("data.frame", paste(form_txt, collapse = " "),
+                       fixed = TRUE))
 })
 
 test_that("separable validates syntax and scale choices", {
     dd <- make_sep_dat()
 
-    expect_error(
-        glmmTMB(y ~ 1 + separable(us(member) %x% ar1(0 + time) | group,
-                                  scale = us(member)),
-                data = dd, doFit = FALSE),
-        "no-intercept"
+    bad_specs <- list(
+        list(y ~ 1 + separable(us(member) %x% ar1(0 + time) | group,
+                               scale = us(member)),
+             "no-intercept"),
+        list(y ~ 1 + separable(us(0 + member) %x% homcs(0 + time) | group),
+             "specify the scale mode"),
+        list(y ~ 1 + separable(ar1(0 + member) %x% ar1(0 + time) | group),
+             "no unambiguous scale margin"),
+        list(y ~ 1 + separable(foo(0 + member) %x% ar1(0 + time) | group),
+             "Unsupported separable\\(\\) margin: foo"),
+        list(y ~ 1 + separable(us(0 + member) %x% ar1(0 + time) | group,
+                               scale = product(cs(0 + item))),
+             "must match one of the specified margins"),
+        list(y ~ 1 + separable(us(0 + member) %x% ar1(0 + time) | group,
+                               scale = product(us(0 + member),
+                                               us(0 + member))),
+             "scale margins must be unique")
     )
-    expect_error(
-        glmmTMB(y ~ 1 + separable(us(0 + member) %x% homcs(0 + time) | group),
-                data = dd, doFit = FALSE),
-        "specify the scale mode"
-    )
-    expect_error(
-        glmmTMB(y ~ 1 + separable(ar1(0 + member) %x% ar1(0 + time) | group),
-                data = dd, doFit = FALSE),
-        "no unambiguous scale margin"
-    )
-    expect_error(
-        glmmTMB(y ~ 1 + separable(foo(0 + member) %x% ar1(0 + time) | group),
-                data = dd, doFit = FALSE),
-        "Unsupported separable\\(\\) margin: foo"
-    )
-    expect_error(
-        glmmTMB(y ~ 1 + separable(us(0 + member) %x% ar1(0 + time) | group,
-                                  scale = product(cs(0 + item))),
-                data = dd, doFit = FALSE),
-        "must match one of the specified margins"
-    )
+    for (bad in bad_specs) {
+        expect_error(glmmTMB(bad[[1]], data = dd, doFit = FALSE), bad[[2]])
+    }
+
+    K <- diag(2)
+    dimnames(K) <- list(levels(dd$member), levels(dd$member))
+    env <- list2env(list(K = K), parent = environment())
+    form <- y ~ 1 +
+        separable(equalto(0 + member, K) %x% ar1(0 + time) | group,
+                  scale = product(equalto(0 + member, K)))
+    environment(form) <- env
+    expect_error(glmmTMB(form, data = dd, doFit = FALSE),
+                 "selects a correlation-only margin")
 })
 
 test_that("separable dense x ar1 models fit successfully", {
@@ -359,12 +430,7 @@ test_that("separable dense x ar1 models fit successfully", {
 
 test_that("separable prediction with newdata reports current limitation", {
     dd <- make_sep_dat()
-    theta <- c(log(1), qlogis((0.2 + 1) / 2), ar1_to_theta(0.3))
-    fit <- glmmTMB(y ~ 1 +
-                       separable(homcs(0 + member) %x% ar1(0 + time) | group),
-                   data = dd,
-                   start = list(theta = theta),
-                   map = list(theta = factor(rep(NA, length(theta)))))
+    fit <- fit_fixed_sep(dd)
 
     expect_error(predict(fit, newdata = dd[1, ]),
                  "newdata is not yet implemented")
@@ -372,12 +438,7 @@ test_that("separable prediction with newdata reports current limitation", {
 
 test_that("separable simulation works for product covariance structures", {
     dd <- make_sep_dat(n_time = 2, reps = TRUE)
-    theta <- c(log(1), qlogis((0.2 + 1) / 2), ar1_to_theta(0.3))
-    fit <- glmmTMB(y ~ 1 +
-                       separable(homcs(0 + member) %x% ar1(0 + time) | group),
-                   data = dd,
-                   start = list(theta = theta),
-                   map = list(theta = factor(rep(NA, length(theta)))))
+    fit <- fit_fixed_sep(dd)
 
     sims <- simulate(fit, nsim = 2)
     expect_s3_class(sims, "data.frame")

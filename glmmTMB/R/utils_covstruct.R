@@ -253,73 +253,41 @@ parseNumLevels <- function(levels) {
     stop("Internal separable() spec is missing or malformed.")
 }
 
-.sep_resolve_spec_id <- function(id, sepSpecs) {
-    if (!is.numeric(id) || length(id) != 1L || is.na(id) ||
-        is.null(sepSpecs)) {
-        stop("Internal separable() spec id is missing or out of range.")
-    }
-    id <- as.integer(id)
-    if (id < 1L || id > length(sepSpecs)) {
-        stop("Internal separable() spec id is missing or out of range.")
-    }
-    id
-}
-
-.sep_spec_from_id_or_value <- function(x, sepSpecs) {
-    if (is.numeric(x) && length(x) == 1L) {
-        return(sepSpecs[[.sep_resolve_spec_id(x, sepSpecs)]])
-    }
-    x
+.sep_nfun <- function(n) {
+    if (is.function(n)) return(function(d) as.integer(n(d)))
+    force(n)
+    function(d) as.integer(n)
 }
 
 .sep_theta <- function(...) {
     blocks <- list(...)
-    nms <- names(blocks)
-    if (length(blocks) == 1L && (is.null(nms) || !nzchar(nms))) {
-        nms <- "corr"
+    if (length(blocks) == 1L && is.null(names(blocks))) {
+        names(blocks) <- "corr"
     }
-    if (length(blocks) > 0L &&
-        (is.null(nms) || any(!nzchar(nms)) || anyDuplicated(nms))) {
-        stop("Malformed separable() theta contract.")
-    }
-    blocks <- Map(function(name, n) {
-        n_fun <- if (is.function(n)) n else function(d) n
-        list(name = name, n = function(d) as.integer(n_fun(d)))
-    }, nms, blocks)
-    list(blocks = blocks)
+    list(blocks = Map(function(name, n) {
+        list(name = name, n = .sep_nfun(n))
+    }, names(blocks), blocks))
 }
 
 .sep_scale <- function(kind = c("none", "homogeneous", "heterogeneous"),
-                       n = 0L, auto = NULL, fixed = FALSE) {
+                       n = 0L, auto = !identical(kind, "none"),
+                       fixed = FALSE) {
     kind <- match.arg(kind)
-    n_fun <- if (is.function(n)) n else function(d) n
-    can_scale <- !identical(kind, "none")
-    if (is.null(auto)) auto <- can_scale
-    fixed <- isTRUE(fixed)
     list(kind = kind,
-         can_scale = can_scale,
-         can_auto_scale = auto,
-         fixed_scale = fixed,
-         n = function(d) as.integer(n_fun(d)))
+         can_scale = !identical(kind, "none"),
+         can_auto_scale = isTRUE(auto),
+         fixed_scale = isTRUE(fixed),
+         n = .sep_nfun(n))
 }
 
 .sep_metadata <- function(dist_coord_dim = NULL) {
     needs_dist <- !is.null(dist_coord_dim)
-    if (needs_dist && !(length(dist_coord_dim) == 1L &&
-                        (is.na(dist_coord_dim) || dist_coord_dim >= 1L))) {
-        stop("Unsupported separable() distance metadata.")
-    }
     list(needs_dist = needs_dist,
          dist_coord_dim = if (needs_dist) as.integer(dist_coord_dim) else NA_integer_)
 }
 
 .sep_payload <- function(kind, arg, frame = FALSE) {
-    if (!is.character(kind) || length(kind) != 1L || !nzchar(kind) ||
-        length(arg) != 1L || is.na(arg) || arg < 1L ||
-        !is.logical(frame) || length(frame) != 1L || is.na(frame)) {
-        stop("Malformed separable() payload contract.")
-    }
-    list(kind = kind, arg = as.integer(arg), frame = frame)
+    list(kind = kind, arg = as.integer(arg), frame = isTRUE(frame))
 }
 
 .sep_extra <- function(n = 0L, frame_args = integer(), payloads = list(),
@@ -335,53 +303,20 @@ parseNumLevels <- function(levels) {
         payloads <- list(payloads)
     }
     payloads <- lapply(payloads, function(x) {
-        if (is.null(x$kind) || is.null(x$arg) || is.null(x$frame)) {
-            stop("Malformed separable() payload contract.")
-        }
         .sep_payload(x$kind, x$arg, x$frame)
     })
-    if (length(n) != 1L || n < 0L ||
-        any(frame_args < 1L | frame_args > n)) {
-        stop("Malformed separable() extra-argument contract.")
-    }
     payload_args <- vapply(payloads, `[[`, integer(1), "arg")
-    if (any(payload_args < 1L | payload_args > n)) {
-        stop("Malformed separable() payload contract.")
-    }
     frame_args <- sort(unique(c(frame_args,
                                 payload_args[vapply(payloads, `[[`,
                                                      logical(1), "frame")])))
     list(n = n, frame_args = frame_args, payloads = payloads)
 }
 
-.sep_margin_entry <- function(code, builder, scale, theta,
+.sep_margin_entry <- function(scale, theta = .sep_theta(),
                               metadata = .sep_metadata(),
                               extra = .sep_extra(),
                               validate_payload = NULL) {
-    if (is.null(scale$kind) || !is.function(scale$n) ||
-        is.null(scale$can_scale) || is.null(scale$can_auto_scale) ||
-        is.null(scale$fixed_scale)) {
-        stop("Malformed separable() scale contract for ", code)
-    }
-    if (is.null(theta$blocks)) {
-        stop("Malformed separable() theta contract for ", code)
-    }
-    if (is.null(metadata$needs_dist) || is.null(metadata$dist_coord_dim)) {
-        stop("Malformed separable() metadata contract for ", code)
-    }
-    if (is.null(extra$n) || is.null(extra$frame_args) ||
-        is.null(extra$payloads)) {
-        stop("Malformed separable() extra-argument contract for ", code)
-    }
-    if (!is.null(validate_payload) && !is.function(validate_payload)) {
-        stop("Malformed separable() payload validator for ", code)
-    }
-    if (!scale$kind %in% c("none", "homogeneous", "heterogeneous")) {
-        stop("Unknown separable() scale kind for ", code, ": ", scale$kind)
-    }
     list(
-        code = code,
-        builder = builder,
         scale = scale,
         theta = theta,
         metadata = metadata,
@@ -394,101 +329,56 @@ parseNumLevels <- function(levels) {
 
 .sep_validate_propto_payload <- function(payload, value, cnms, expr, env) {
     if (!identical(payload$kind, "cov_matrix")) return(value)
-    mat_names <- colnames(value)
-    if (is.null(mat_names)) mat_names <- rownames(value)
-    if (is.null(mat_names)) {
-        stop("row or column names of propto matrix are required",
-             call. = FALSE)
+    if (!is.numeric(value)) {
+        stop("separable() propto() margin expects a numeric matrix ",
+             "extra argument.", call. = FALSE)
     }
-    if (!is.null(rownames(value)) && !identical(rownames(value), mat_names)) {
-        stop("row and column names of propto matrix do not match",
-             call. = FALSE)
-    }
-    if (!identical(mat_names, cnms)) {
-        labs <- attr(stats::terms(.sep_margin_formula(expr, env)),
-                     "term.labels")
-        prefixed <- paste0(labs, mat_names)
-        if (!identical(prefixed, cnms)) {
-            stop("column or row names of the propto matrix do not match ",
-                 "the separable() margin columns.", call. = FALSE)
-        }
-    }
+    tryCatch(
+        checkProptoNames(aa = value, cnms = cnms,
+                         reXtrm = .sep_margin_formula(expr, env)),
+        error = function(e) {
+            stop("separable() propto() margin ", conditionMessage(e),
+                 call. = FALSE)
+        })
     value
 }
 
-.sep_margin_registry <- list(
-    diag = .sep_margin_entry("diag", "diag",
-                             .sep_scale("heterogeneous", function(n) n),
-                             .sep_theta()),
-    homdiag = .sep_margin_entry("homdiag", "diag",
-                                .sep_scale("homogeneous", 1L),
-                                .sep_theta()),
-    cs = .sep_margin_entry("cs", "dense_corr",
-                           .sep_scale("heterogeneous", function(n) n),
-                           .sep_theta(corr = 1L)),
-    homcs = .sep_margin_entry("homcs", "dense_corr",
-                              .sep_scale("homogeneous", 1L),
-                              .sep_theta(corr = 1L)),
-    us = .sep_margin_entry("us", "dense_corr",
-                           .sep_scale("heterogeneous", function(n) n),
-                           .sep_theta(corr = function(n) n * (n - 1L) / 2L)),
-    ar1 = .sep_margin_entry("ar1", "ar1",
-                            .sep_scale("homogeneous", 1L, auto = FALSE),
-                            .sep_theta(corr = 1L)),
-    hetar1 = .sep_margin_entry("hetar1", "ar1",
-                               .sep_scale("heterogeneous", function(n) n),
-                               .sep_theta(corr = 1L)),
-    ou = .sep_margin_entry("ou", "spatial",
-                           .sep_scale("homogeneous", 1L),
-                           .sep_theta(decay = 1L),
-                           .sep_metadata(dist_coord_dim = 1L)),
-    exp = .sep_margin_entry("exp", "spatial",
-                            .sep_scale("homogeneous", 1L),
-                            .sep_theta(range = 1L),
-                            .sep_metadata(dist_coord_dim = NA)),
-    gau = .sep_margin_entry("gau", "spatial",
-                            .sep_scale("homogeneous", 1L),
-                            .sep_theta(range = 1L),
-                            .sep_metadata(dist_coord_dim = NA)),
-    mat = .sep_margin_entry("mat", "spatial",
-                            .sep_scale("homogeneous", 1L),
-                            .sep_theta(range = 1L, smoothness = 1L),
-                            .sep_metadata(dist_coord_dim = NA)),
-    toep = .sep_margin_entry("toep", "toep",
-                             .sep_scale("heterogeneous", function(n) n),
-                             .sep_theta(corr = function(n) n - 1L)),
-    homtoep = .sep_margin_entry("homtoep", "toep",
-                                .sep_scale("homogeneous", 1L),
-                                .sep_theta(corr = function(n) n - 1L)),
-    propto = .sep_margin_entry("propto", "fixed_cov",
-                               .sep_scale("homogeneous", 1L),
-                               .sep_theta(),
-                               extra = .sep_cov_matrix_extra,
-                               validate_payload = .sep_validate_propto_payload),
-    equalto = .sep_margin_entry("equalto", "fixed_cov",
-                                .sep_scale("none", fixed = TRUE),
-                                .sep_theta(),
-                                extra = .sep_cov_matrix_extra)
-)
+.sep_margin_registry <- local({
+    n_dim <- function(n) n
+    n_pairs <- function(n) n * (n - 1L) / 2L
+    n_lags <- function(n) n - 1L
+    het <- .sep_scale("heterogeneous", n_dim)
+    hom <- .sep_scale("homogeneous", 1L)
+    spatial <- .sep_metadata(NA)
 
-## Each supported separable builder kind must have a C++ margin builder that
-## returns a standard-deviation vector and a correlation matrix.
-.sep_builder_kind_code <- c(
-    dense_corr = 1L,
-    ar1 = 2L,
-    diag = 3L,
-    spatial = 4L,
-    toep = 5L,
-    fixed_cov = 6L
-)
-
-.sep_scale_mode_code <- c(
-    none = 0L,            # fixed scales supplied by one or more margins
-    margin = 1L,          # one margin supplies absolute SDs
-    global = 2L,          # one global scale, all margins correlation-only
-    product = 3L,         # all eligible margin scales multiply
-    selected_product = 4L    # selected margin scales multiply
-)
+    ans <- list(
+        diag = .sep_margin_entry(het),
+        homdiag = .sep_margin_entry(hom),
+        cs = .sep_margin_entry(het, .sep_theta(corr = 1L)),
+        homcs = .sep_margin_entry(hom, .sep_theta(corr = 1L)),
+        us = .sep_margin_entry(het, .sep_theta(corr = n_pairs)),
+        ar1 = .sep_margin_entry(.sep_scale("homogeneous", 1L, auto = FALSE),
+                                .sep_theta(corr = 1L)),
+        hetar1 = .sep_margin_entry(het, .sep_theta(corr = 1L)),
+        ou = .sep_margin_entry(hom, .sep_theta(decay = 1L),
+                               .sep_metadata(1L)),
+        exp = .sep_margin_entry(hom, .sep_theta(range = 1L), spatial),
+        gau = .sep_margin_entry(hom, .sep_theta(range = 1L), spatial),
+        mat = .sep_margin_entry(hom,
+                                .sep_theta(range = 1L, smoothness = 1L),
+                                spatial),
+        toep = .sep_margin_entry(het, .sep_theta(corr = n_lags)),
+        homtoep = .sep_margin_entry(hom, .sep_theta(corr = n_lags)),
+        propto = .sep_margin_entry(hom,
+                                   extra = .sep_cov_matrix_extra,
+                                   validate_payload =
+                                       .sep_validate_propto_payload),
+        equalto = .sep_margin_entry(.sep_scale("none", fixed = TRUE),
+                                    extra = .sep_cov_matrix_extra)
+    )
+    for (code in names(ans)) ans[[code]]$code <- code
+    ans
+})
 
 .sep_scale_kind_code <- c(
     none = 0L,
@@ -510,11 +400,6 @@ parseNumLevels <- function(levels) {
     cov_matrix = 2L
 )
 
-.sep_supported_margin_product <- function(regs) {
-    kinds <- vapply(regs, `[[`, character(1), "builder")
-    all(kinds %in% names(.sep_builder_kind_code))
-}
-
 .sep_margin_label <- function(x) {
     x <- as.data.frame(x, stringsAsFactors = FALSE)
     paste0(x$struc, "(", x$var, ")", collapse = " x ")
@@ -526,6 +411,38 @@ parseNumLevels <- function(levels) {
         paste(vapply(z, .sep_deparse, character(1)), collapse = "\r")
     }, character(1))
     paste(x$struc, x$var, extra, sep = "\r")
+}
+
+.sep_match_scale_margins <- function(scale_spec, margins, regs, single = FALSE,
+                                     unique = FALSE) {
+    if (single && nrow(scale_spec) != 1L)
+        stop("separable() scale must be a single margin call such as ",
+             "scale = us(0 + member).")
+    margin_key <- .sep_margin_key(margins)
+    scale_key <- .sep_margin_key(scale_spec)
+    scale_margin <- if (single) which(margin_key == scale_key) else
+        match(scale_key, margin_key)
+    if (single && length(scale_margin) != 1L)
+        stop("separable() scale must match one of the specified margins, ",
+             "for example scale = us(0 + member) when us(0 + member) ",
+             "is a margin.")
+    if (anyNA(scale_margin)) {
+        i <- which(is.na(scale_margin))[[1]]
+        stop("separable() scale margin ", scale_spec$struc[i], "(",
+             scale_spec$var[i], ") must match one of the specified ",
+             "margins.")
+    }
+    bad_scale <- which(!vapply(regs[scale_margin],
+                               function(x) x$scale$can_scale, logical(1)))
+    if (length(bad_scale)) {
+        i <- bad_scale[[1]]
+        stop("separable() scale = ", scale_spec$struc[i], "(",
+             scale_spec$var[i], ") selects a correlation-only margin. ",
+             "Use a scale-capable margin or scale = global().")
+    }
+    if (unique && anyDuplicated(scale_margin))
+        stop("separable() scale margins must be unique.")
+    scale_margin
 }
 
 .sep_scale_info <- function(margins, regs, scale = NULL) {
@@ -558,23 +475,8 @@ parseNumLevels <- function(levels) {
             scale_margin <- scale_candidates
         }
     } else if (identical(scale_mode, "margin")) {
-        scale_spec <- scale$margins
-        if (nrow(scale_spec) != 1L) {
-            stop("separable() scale must be a single margin call such as ",
-                 "scale = us(0 + member).")
-        }
-        scale_margin <- which(.sep_margin_key(margins) ==
-                              .sep_margin_key(scale_spec))
-        if (length(scale_margin) != 1L) {
-            stop("separable() scale must match one of the specified margins, ",
-                 "for example scale = us(0 + member) when us(0 + member) ",
-                 "is a margin.")
-        }
-        if (!regs[[scale_margin]]$scale$can_scale) {
-            stop("separable() scale = ", scale_spec$struc, "(",
-                 scale_spec$var, ") selects a correlation-only margin. ",
-                 "Use a scale-capable margin or scale = global().")
-        }
+        scale_margin <- .sep_match_scale_margins(scale$margins, margins, regs,
+                                                 single = TRUE)
     } else if (identical(scale_mode, "global")) {
         scale_margin <- integer()
     } else if (identical(scale_mode, "product")) {
@@ -584,26 +486,8 @@ parseNumLevels <- function(levels) {
                  "scale-capable margin.")
         }
     } else if (identical(scale_mode, "selected_product")) {
-        scale_spec <- scale$margins
-        scale_margin <- match(.sep_margin_key(scale_spec),
-                              .sep_margin_key(margins))
-        if (anyNA(scale_margin)) {
-            i <- which(is.na(scale_margin))[[1]]
-            stop("separable() scale margin ", scale_spec$struc[i], "(",
-                 scale_spec$var[i], ") must match one of the specified ",
-                 "margins.")
-        }
-        scale_ok <- vapply(regs[scale_margin],
-                            function(x) x$scale$can_scale, logical(1))
-        if (!all(scale_ok)) {
-            i <- which(!scale_ok)[[1]]
-            stop("separable() scale = ", scale_spec$struc[i], "(",
-                 scale_spec$var[i], ") selects a correlation-only margin. ",
-                 "Use a scale-capable margin or scale = global().")
-        }
-        if (anyDuplicated(scale_margin)) {
-            stop("separable() scale margins must be unique.")
-        }
+        scale_margin <- .sep_match_scale_margins(scale$margins, margins, regs,
+                                                 unique = TRUE)
     } else if (identical(scale_mode, "none")) {
         scale_margin <- integer()
     } else {
@@ -612,23 +496,9 @@ parseNumLevels <- function(levels) {
 
     list(
         mode = scale_mode,
-        mode_code = as.integer(.sep_scale_mode_code[[scale_mode]]),
         spec = as.integer(scale_margin - 1L),
         margin = scale_margin
     )
-}
-
-.sep_stop_unsupported_product <- function(margins, regs, scale = NULL) {
-    ## Diagnose scale errors before reporting unsupported density combinations.
-    .sep_scale_info(margins, regs, scale)
-    supported <- names(.sep_margin_registry)[
-        vapply(.sep_margin_registry, function(x) {
-            x$builder %in% names(.sep_builder_kind_code)
-        }, logical(1))
-    ]
-    stop("separable() frontend parsed ", .sep_margin_label(margins),
-         ", but the backend currently only evaluates products among ",
-         paste0(supported, "()", collapse = ", "), ".")
 }
 
 .sep_registry_matrix_payloads <- function(regs) {
@@ -725,9 +595,10 @@ parseNumLevels <- function(levels) {
         }
     }
 
-    if (length(rows)) do.call(rbind, rows) else
+    ans <- if (length(rows)) do.call(rbind, rows) else
         data.frame(margin = integer(), kind = integer(),
                    start = integer(), length = integer())
+    as.matrix(ans)
 }
 
 .sep_restruc_info <- function(spec, cnms, blksize) {
@@ -749,9 +620,6 @@ parseNumLevels <- function(levels) {
 
     strucs <- margins$struc
     regs <- .sep_margin_registry[strucs]
-    if (!.sep_supported_margin_product(regs)) {
-        .sep_stop_unsupported_product(margins, regs, spec$scale)
-    }
     if (!identical(margins$var, spec$grid)) {
         stop("The separable() margin variables must match the product design. ",
              "Use, for example, ",
@@ -761,8 +629,7 @@ parseNumLevels <- function(levels) {
     scale_info <- .sep_scale_info(margins, regs, spec$scale)
 
     theta_layout <- .sep_theta_block_layout(regs, dims, scale_info)
-    ntheta <- sum(theta_layout$length)
-    builder_kind <- vapply(regs, `[[`, character(1), "builder")
+    ntheta <- sum(theta_layout[, "length"])
     scale_kind <- vapply(regs, function(x) x$scale$kind, character(1))
     matrix_info <- .sep_matrix_payload_info(regs, spec, dims)
 
@@ -773,14 +640,9 @@ parseNumLevels <- function(levels) {
             sepMarginVars = margins$var,
             sepCodes = as.integer(vapply(strucs, function(z) .valid_covstruct[[z]],
                                          numeric(1))),
-            sepBuilderKinds = as.integer(.sep_builder_kind_code[builder_kind]),
             sepScaleKinds = as.integer(.sep_scale_kind_code[scale_kind]),
-            sepScaleMode = scale_info$mode_code,
             sepScaleSpec = scale_info$spec,
-            sepThetaBlockMargins = theta_layout$margin,
-            sepThetaBlockKinds = theta_layout$kind,
-            sepThetaBlockStarts = theta_layout$start,
-            sepThetaBlockLengths = theta_layout$length,
+            sepThetaBlocks = theta_layout,
             sepMatrixPayloadKinds = matrix_info$kinds,
             sepMatrixPayloadStarts = matrix_info$starts,
             sepMatrixPayloadValues = matrix_info$values
@@ -920,18 +782,21 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_check_cov_payload <- function(x, cnms, struc) {
-    if (!is.matrix(x) || !is.numeric(x)) {
-        stop("separable() ", struc, "() margin expects a numeric matrix ",
-             "extra argument.", call. = FALSE)
+    if (identical(struc, "equalto")) {
+        tryCatch(checkEqualto(aa = x, cnms = cnms),
+                 error = function(e) {
+                     stop("separable() equalto() margin ",
+                          conditionMessage(e), call. = FALSE)
+                 })
+        return(x)
     }
-    if (nrow(x) != ncol(x)) {
-        stop("separable() ", struc, "() margin covariance matrix must be square.",
-             call. = FALSE)
+    if (identical(struc, "propto")) {
+        return(x)
     }
-    if (nrow(x) != length(cnms)) {
-        stop("separable() ", struc, "() margin covariance matrix has ",
-             "dimension ", nrow(x), ", but the margin has ", length(cnms),
-             " columns.", call. = FALSE)
+    if (!is.matrix(x) || !is.numeric(x) ||
+        nrow(x) != ncol(x) || nrow(x) != length(cnms)) {
+        stop("separable() ", struc, "() margin expects a numeric square ",
+             "matrix matching the margin columns.", call. = FALSE)
     }
     x
 }
@@ -963,38 +828,6 @@ parseNumLevels <- function(levels) {
     payloads
 }
 
-.sep_sparse_rows <- function(X, n) {
-    X <- methods::as(X, "TsparseMatrix")
-    if (!length(X@x)) {
-        return(rep(list(list(j = integer(0), x = numeric(0))), n))
-    }
-    rows <- split(data.frame(j = X@j + 1L, x = X@x), X@i + 1L)
-    lapply(seq_len(n), function(i) {
-        r <- rows[[as.character(i)]]
-        if (is.null(r)) list(j = integer(0), x = numeric(0))
-        else list(j = as.integer(r$j), x = as.numeric(r$x))
-    })
-}
-
-.sep_row_kron_entries <- function(entries, dims) {
-    ## First margin is fastest, matching expand.grid(), sepgrid(), and the C++
-    ## array order used by the separable likelihood.
-    ans <- list(j = 1L, x = 1)
-    stride <- 1L
-    for (m in seq_along(entries)) {
-        e <- entries[[m]]
-        if (!length(e$j) || !length(ans$j)) {
-            return(list(j = integer(0), x = numeric(0)))
-        }
-        ans <- list(
-            j = as.integer(as.vector(outer(ans$j, stride * (e$j - 1L), "+"))),
-            x = as.vector(outer(ans$x, e$x, "*"))
-        )
-        stride <- stride * dims[[m]]
-    }
-    ans
-}
-
 .sep_build_product_reterm <- function(spec, fr, group, env) {
     margins <- .sep_spec_df(spec$margins)
     Xlist <- lapply(margins$expr, .sep_margin_matrix, fr = fr, env = env)
@@ -1004,21 +837,12 @@ parseNumLevels <- function(levels) {
     g <- as.integer(group)
     if (anyNA(g)) stop("separable() grouping factor contains NA values.")
     n <- nrow(fr)
-    p <- prod(dims)
-    rows <- lapply(Xlist, .sep_sparse_rows, n = n)
-    row_entries <- lapply(seq_len(n), function(r) {
-        .sep_row_kron_entries(lapply(rows, `[[`, r), dims)
-    })
-    nnz <- lengths(lapply(row_entries, `[[`, "j"))
-    obs <- rep.int(seq_len(n), nnz)
-    jj <- unlist(lapply(row_entries, `[[`, "j"), use.names = FALSE)
-    xx <- unlist(lapply(row_entries, `[[`, "x"), use.names = FALSE)
-    Zt <- Matrix::sparseMatrix(
-        i = (g[obs] - 1L) * p + jj,
-        j = obs,
-        x = xx,
-        dims = c(nlevels(group) * p, n)
-    )
+    product_t <- Reduce(function(prod_t, X) {
+        Matrix::KhatriRao(Matrix::t(X), prod_t)
+    }, Xlist[-1L], init = Matrix::t(Xlist[[1L]]))
+    groups_t <- Matrix::sparseMatrix(i = g, j = seq_len(n), x = 1,
+                                     dims = c(nlevels(group), n))
+    Zt <- Matrix::KhatriRao(groups_t, product_t)
 
     spec$dims <- dims
     spec$margin_cnms <- lapply(Xlist, colnames)

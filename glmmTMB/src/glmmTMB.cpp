@@ -98,28 +98,6 @@ enum valid_covStruct {
   separable_covstruct = 16
 };
 
-enum separable_builder_kind {
-  // These values must match `.sep_builder_kind_code` in R/utils_covstruct.R.
-  // They are deliberately separate from valid_covStruct: many covariance
-  // structures can share the same separable builder kind.  For example, homcs
-  // and us are both "dense correlation" margins in the current prototype.
-  dense_corr_builder = 1,
-  ar1_builder = 2,
-  diag_builder = 3,
-  spatial_builder = 4,
-  toep_builder = 5,
-  fixed_cov_builder = 6
-};
-
-enum separable_scale_mode {
-  // These values must match `.sep_scale_mode_code` in R/utils_covstruct.R.
-  no_sep_scale = 0,
-  margin_sep_scale = 1,
-  global_sep_scale = 2,
-  product_sep_scale = 3,
-  selected_product_sep_scale = 4
-};
-
 enum separable_scale_kind {
   // These values must match `.sep_scale_kind_code` in R/utils_covstruct.R.
   no_sep_scale_kind = 0,
@@ -135,6 +113,12 @@ enum separable_theta_block_kind {
   range_theta_block = 4,
   smoothness_theta_block = 5,
   decay_theta_block = 6
+};
+
+enum separable_theta_block_column {
+  sep_theta_margin_col = 0, sep_theta_kind_col = 1,
+  sep_theta_start_col = 2, sep_theta_length_col = 3,
+  sep_theta_ncol = 4
 };
 
 enum separable_matrix_payload_kind {
@@ -358,14 +342,9 @@ struct per_term_info {
   // Optional metadata for separable covariance structures.
   vector<int> sepDims;
   vector<int> sepCodes;
-  vector<int> sepBuilderKinds;
   vector<int> sepScaleKinds;
-  vector<int> sepScaleMode;
   vector<int> sepScaleSpec;
-  vector<int> sepThetaBlockMargins;
-  vector<int> sepThetaBlockKinds;
-  vector<int> sepThetaBlockStarts;
-  vector<int> sepThetaBlockLengths;
+  matrix<int> sepThetaBlocks;
   vector<int> sepMatrixPayloadKinds;
   vector<int> sepMatrixPayloadStarts;
   vector<Type> sepMatrixPayloadValues;
@@ -413,6 +392,14 @@ struct terms_t : vector<per_term_info<Type> > {
 	  (*this)(i).FIELD = asVector<int>(value);		\
 	}							\
       }
+#define GET_OPTIONAL_INT_MATRIX(NAME, FIELD)			\
+      {								\
+	SEXP value = getListElement(y, NAME);			\
+	if(!Rf_isNull(value)){				\
+	  RObjectTestExpectedType(value, &Rf_isMatrix, NAME);	\
+	  (*this)(i).FIELD = asMatrix<int>(value);		\
+	}							\
+      }
 #define GET_OPTIONAL_TYPE_VECTOR(NAME, FIELD)			\
       {								\
 	SEXP value = getListElement(y, NAME);			\
@@ -423,18 +410,14 @@ struct terms_t : vector<per_term_info<Type> > {
       }
       GET_OPTIONAL_INT_VECTOR("sepDims", sepDims)
       GET_OPTIONAL_INT_VECTOR("sepCodes", sepCodes)
-      GET_OPTIONAL_INT_VECTOR("sepBuilderKinds", sepBuilderKinds)
       GET_OPTIONAL_INT_VECTOR("sepScaleKinds", sepScaleKinds)
-      GET_OPTIONAL_INT_VECTOR("sepScaleMode", sepScaleMode)
       GET_OPTIONAL_INT_VECTOR("sepScaleSpec", sepScaleSpec)
-      GET_OPTIONAL_INT_VECTOR("sepThetaBlockMargins", sepThetaBlockMargins)
-      GET_OPTIONAL_INT_VECTOR("sepThetaBlockKinds", sepThetaBlockKinds)
-      GET_OPTIONAL_INT_VECTOR("sepThetaBlockStarts", sepThetaBlockStarts)
-      GET_OPTIONAL_INT_VECTOR("sepThetaBlockLengths", sepThetaBlockLengths)
+      GET_OPTIONAL_INT_MATRIX("sepThetaBlocks", sepThetaBlocks)
       GET_OPTIONAL_INT_VECTOR("sepMatrixPayloadKinds", sepMatrixPayloadKinds)
       GET_OPTIONAL_INT_VECTOR("sepMatrixPayloadStarts", sepMatrixPayloadStarts)
       GET_OPTIONAL_TYPE_VECTOR("sepMatrixPayloadValues", sepMatrixPayloadValues)
 #undef GET_OPTIONAL_INT_VECTOR
+#undef GET_OPTIONAL_INT_MATRIX
 #undef GET_OPTIONAL_TYPE_VECTOR
     }
   }
@@ -550,9 +533,26 @@ bool separable_margin_has_scale(per_term_info<Type>& term, int m) {
   return false;
 }
 
+template <class Type>
+bool separable_has_theta_block(per_term_info<Type>& term,
+			       int margin, int kind) {
+  if (term.sepThetaBlocks.rows() == 0) return false;
+  if (term.sepThetaBlocks.cols() != sep_theta_ncol)
+    return false;
+  for (int i = 0; i < term.sepThetaBlocks.rows(); i++)
+    if (term.sepThetaBlocks(i, sep_theta_margin_col) == margin &&
+	term.sepThetaBlocks(i, sep_theta_kind_col) == kind)
+      return true;
+  return false;
+}
+
+template <class Type>
+bool separable_has_global_scale(per_term_info<Type>& term) {
+  return separable_has_theta_block(term, -1, global_scale_theta_block);
+}
+
 struct sep_margin_spec {
   int code;
-  int builder_kind;
   int scale_kind;
   int n;
   int index;
@@ -563,7 +563,6 @@ template <class Type>
 sep_margin_spec separable_margin_spec(per_term_info<Type>& term, int m) {
   sep_margin_spec spec;
   spec.code = term.sepCodes(m);
-  spec.builder_kind = term.sepBuilderKinds(m);
   spec.scale_kind = term.sepScaleKinds(m);
   spec.n = term.sepDims(m);
   spec.index = m;
@@ -582,13 +581,15 @@ sep_theta_block separable_theta_block(per_term_info<Type>& term,
   sep_theta_block out;
   out.start = -1;
   out.length = 0;
-  for (int i = 0; i < term.sepThetaBlockStarts.size(); i++) {
-    if (term.sepThetaBlockMargins(i) == margin &&
-	term.sepThetaBlockKinds(i) == kind) {
+  if (term.sepThetaBlocks.cols() != sep_theta_ncol)
+    error("separable theta block metadata is inconsistent");
+  for (int i = 0; i < term.sepThetaBlocks.rows(); i++) {
+    if (term.sepThetaBlocks(i, sep_theta_margin_col) == margin &&
+	term.sepThetaBlocks(i, sep_theta_kind_col) == kind) {
       if (out.start >= 0)
 	error("duplicate separable theta block");
-      out.start = term.sepThetaBlockStarts(i);
-      out.length = term.sepThetaBlockLengths(i);
+      out.start = term.sepThetaBlocks(i, sep_theta_start_col);
+      out.length = term.sepThetaBlocks(i, sep_theta_length_col);
     }
   }
   if (out.start < 0)
@@ -624,6 +625,48 @@ matrix<Type> compound_symmetry_corr(int n, Type corr_transf) {
   for (int i = 0; i < n; i++)
     for (int j = 0; j < n; j++)
       corr(i, j) = (i == j ? Type(1) : rho);
+  return corr;
+}
+
+template <class Type>
+matrix<Type> toeplitz_corr(int n, const vector<Type>& corr_transf) {
+  vector<Type> corr_params =
+    corr_transf / sqrt(Type(1) + corr_transf * corr_transf);
+  matrix<Type> corr(n, n);
+  for (int i = 0; i < n; i++)
+    for (int j = 0; j < n; j++)
+      corr(i, j) = (i == j ? Type(1) :
+		    corr_params((i > j ? i - j : j - i) - 1));
+  return corr;
+}
+
+template <class Type>
+matrix<Type> spatial_corr(int code, const matrix<Type>& dist,
+			  Type theta0, Type theta1) {
+  int n = dist.rows();
+  matrix<Type> corr(n, n);
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j < n; j++) {
+      switch (code) {
+      case ou_covstruct:
+	corr(i, j) = (i == j ? Type(1) : exp(-exp(theta0) * dist(i, j)));
+	break;
+      case exp_covstruct:
+	corr(i, j) = (i == j ? Type(1) : exp(-dist(i, j) * exp(-theta0)));
+	break;
+      case gau_covstruct:
+	corr(i, j) = (i == j ? Type(1) :
+		      exp(-pow(dist(i, j), 2) * exp(Type(-2) * theta0)));
+	break;
+      case mat_covstruct:
+	corr(i, j) = (i == j ? Type(1) :
+		      matern(dist(i, j), exp(theta0), exp(theta1)));
+	break;
+      default:
+	error("unsupported spatial covariance structure");
+      }
+    }
+  }
   return corr;
 }
 
@@ -707,15 +750,10 @@ void parse_separable_toep_margin(const sep_margin_spec& margin,
 
   parse_separable_margin_sd(margin, theta, term, margin_sd);
 
-  vector<Type> corr_params =
+  vector<Type> corr_transf =
     separable_theta_vector(theta, term, margin.index, corr_theta_block,
 			   margin.n - 1);
-  corr_params = corr_params / sqrt(Type(1) + corr_params * corr_params);
-  corr.resize(margin.n, margin.n);
-  for (int i = 0; i < margin.n; i++)
-    for (int j = 0; j < margin.n; j++)
-      corr(i, j) = (i == j ? Type(1) :
-		    corr_params((i > j ? i - j : j - i) - 1));
+  corr = toeplitz_corr(margin.n, corr_transf);
 }
 
 template <class Type>
@@ -766,7 +804,6 @@ void parse_separable_spatial_margin(const sep_margin_spec& margin,
     error("unsupported spatial margin for separable covariance structure");
 
   parse_separable_margin_sd(margin, theta, term, margin_sd);
-  corr.resize(margin.n, margin.n);
 
   int theta0_kind = (margin.code == ou_covstruct) ?
     decay_theta_block : range_theta_block;
@@ -777,29 +814,7 @@ void parse_separable_spatial_margin(const sep_margin_spec& margin,
     theta1 = separable_theta_scalar(theta, term, margin.index,
 				    smoothness_theta_block);
   }
-
-  for (int i = 0; i < margin.n; i++) {
-    for (int j = 0; j < margin.n; j++) {
-      switch (margin.code) {
-      case ou_covstruct:
-	corr(i, j) = (i == j ? Type(1) : exp(-exp(theta0) * dist(i, j)));
-	break;
-      case exp_covstruct:
-	corr(i, j) = (i == j ? Type(1) : exp(-dist(i, j) * exp(-theta0)));
-	break;
-      case gau_covstruct:
-	corr(i, j) = (i == j ? Type(1) : exp(-pow(dist(i, j), 2) *
-					     exp(Type(-2) * theta0)));
-	break;
-      case mat_covstruct:
-	corr(i, j) = (i == j ? Type(1) :
-		      matern(dist(i, j), exp(theta0), exp(theta1)));
-	break;
-      default:
-	error("unsupported spatial margin for separable covariance structure");
-      }
-    }
-  }
+  corr = spatial_corr(margin.code, dist, theta0, theta1);
 }
 
 template <class Type>
@@ -827,29 +842,23 @@ void parse_separable_fixed_cov_margin(const sep_margin_spec& margin,
 template <class Type>
 void check_separable_metadata(per_term_info<Type>& term) {
   if (term.sepDims.size() < 2 || term.sepCodes.size() != term.sepDims.size() ||
-      term.sepBuilderKinds.size() != term.sepDims.size() ||
-      term.sepScaleKinds.size() != term.sepDims.size() ||
-      term.sepScaleMode.size() != 1)
+      term.sepScaleKinds.size() != term.sepDims.size())
     error("separable covariance structure is missing margin metadata");
   int n = 1;
   for (int i = 0; i < term.sepDims.size(); i++)
     n *= term.sepDims(i);
   if (n != term.blockSize)
     error("separable dimensions do not match block size");
-  int mode = term.sepScaleMode(0);
-  if (mode < no_sep_scale || mode > selected_product_sep_scale)
-    error("unknown separable scale mode");
-  if (mode == no_sep_scale && term.sepScaleSpec.size() != 0)
-    error("separable no-scale mode should not specify scale margins");
-  if (mode == global_sep_scale && term.sepScaleSpec.size() != 0)
-    error("separable global scale should not specify scale margins");
-  if (mode != no_sep_scale && mode != global_sep_scale &&
-      term.sepScaleSpec.size() == 0)
-    error("separable scale mode is missing selected margins");
+  if (separable_has_global_scale(term) && term.sepScaleSpec.size() != 0)
+    error("separable scale metadata cannot mix global and margin scales");
   for (int i = 0; i < term.sepScaleSpec.size(); i++)
     if (term.sepScaleSpec(i) < 0 ||
 	term.sepScaleSpec(i) >= term.sepDims.size())
       error("separable margin scale index is out of range");
+  for (int i = 0; i < term.sepScaleSpec.size(); i++)
+    for (int j = i + 1; j < term.sepScaleSpec.size(); j++)
+      if (term.sepScaleSpec(i) == term.sepScaleSpec(j))
+	error("separable margin scale indices must be unique");
   for (int i = 0; i < term.sepScaleKinds.size(); i++)
     if (term.sepScaleKinds(i) < no_sep_scale_kind ||
 	term.sepScaleKinds(i) > heterogeneous_sep_scale_kind)
@@ -861,24 +870,23 @@ void check_separable_metadata(per_term_info<Type>& term) {
 
 template <class Type>
 void check_separable_theta_layout(per_term_info<Type>& term, int theta_size) {
-  if (term.sepThetaBlockStarts.size() == 0) return;
-  int n = term.sepThetaBlockStarts.size();
-  if (term.sepThetaBlockLengths.size() != n ||
-      term.sepThetaBlockMargins.size() != n ||
-      term.sepThetaBlockKinds.size() != n)
+  if (term.sepThetaBlocks.rows() == 0) return;
+  if (term.sepThetaBlocks.cols() != sep_theta_ncol)
     error("separable theta block metadata is inconsistent");
 
   int pos = 0;
-  for (int i = 0; i < n; i++) {
-    int margin = term.sepThetaBlockMargins(i);
-    int kind = term.sepThetaBlockKinds(i);
-    int start = term.sepThetaBlockStarts(i);
-    int length = term.sepThetaBlockLengths(i);
+  for (int i = 0; i < term.sepThetaBlocks.rows(); i++) {
+    int margin = term.sepThetaBlocks(i, sep_theta_margin_col);
+    int kind = term.sepThetaBlocks(i, sep_theta_kind_col);
+    int start = term.sepThetaBlocks(i, sep_theta_start_col);
+    int length = term.sepThetaBlocks(i, sep_theta_length_col);
 
     if (margin < -1 || margin >= term.sepDims.size())
       error("separable theta block margin is out of range");
     if (kind < global_scale_theta_block || kind > decay_theta_block)
       error("unknown separable theta block kind");
+    if ((kind == global_scale_theta_block) != (margin == -1))
+      error("separable global scale theta block metadata is inconsistent");
     if (start != pos || length < 0 || start + length > theta_size)
       error("separable theta block layout does not match theta");
     pos += length;
@@ -952,16 +960,12 @@ template <class Type>
 Type separable_dense_nll(array<Type> &U, const vector<Type>& cell_sd,
 			 const matrix<Type>& corr,
 			 per_term_info<Type>& term) {
-  density::MVNORM_t<Type> density(corr);
+  density::MVNORM_t<Type> nldens(corr);
+  density::VECSCALE_t<density::MVNORM_t<Type> > scnldens =
+    density::VECSCALE(nldens, cell_sd);
   Type ans = 0;
   for (int g = 0; g < term.blockReps; g++) {
-    vector<Type> z = U.col(g);
-    Type logscale = 0;
-    for (int k = 0; k < z.size(); k++) {
-      z(k) /= cell_sd(k);
-      logscale += log(cell_sd(k));
-    }
-    ans += density(z) + logscale;
+    ans += scnldens(U.col(g));
   }
   return ans;
 }
@@ -999,13 +1003,14 @@ sep_margin_cov<Type> build_separable_margin_cov(sep_margin_spec margin,
 						per_term_info<Type>& term) {
   sep_margin_cov<Type> out;
 
-  if (margin.builder_kind == diag_builder) {
+  if (is_diag_margin(margin.code)) {
     parse_separable_diag_margin(margin, theta, term, out.sd, out.corr);
-  } else if (margin.builder_kind == ar1_builder) {
+  } else if (margin.code == ar1_covstruct ||
+	     margin.code == hetar1_covstruct) {
     Type phi = Type(0);
     parse_separable_ar1_margin(margin, theta, term, out.sd, phi);
     out.corr = ar1_corr(margin.n, phi);
-  } else if (margin.builder_kind == dense_corr_builder) {
+  } else if (is_dense_corr_margin(margin.code)) {
     vector<Type> us_corr_params(0);
     parse_separable_dense_margin(margin, theta, term, out.sd,
 				 out.corr, us_corr_params);
@@ -1013,13 +1018,14 @@ sep_margin_cov<Type> build_separable_margin_cov(sep_margin_spec margin,
       density::UNSTRUCTURED_CORR_t<Type> us_density(us_corr_params);
       out.corr = us_density.cov();
     }
-  } else if (margin.builder_kind == toep_builder) {
+  } else if (is_toep_margin(margin.code)) {
     parse_separable_toep_margin(margin, theta, term, out.sd, out.corr);
-  } else if (margin.builder_kind == spatial_builder) {
+  } else if (is_spatial_margin(margin.code)) {
     matrix<Type> dist = separable_margin_dist(term, margin.index);
     parse_separable_spatial_margin(margin, theta, term, dist,
 				   out.sd, out.corr);
-  } else if (margin.builder_kind == fixed_cov_builder) {
+  } else if (margin.code == propto_covstruct ||
+	     margin.code == equalto_covstruct) {
     matrix<Type> cov = separable_margin_fixed_cov(term, margin.index);
     parse_separable_fixed_cov_margin(margin, theta, term, cov,
 				     out.sd, out.corr);
@@ -1062,7 +1068,7 @@ sep_corr_product_pars<Type> parse_separable_corr_product(const vector<Type>& the
   check_separable_theta_layout(term, theta.size());
   int n_margin = term.sepDims.size();
   Type global_sd = Type(1);
-  if (term.sepScaleMode(0) == global_sep_scale) {
+  if (separable_has_global_scale(term)) {
     global_sd = exp(separable_theta_scalar(theta, term, -1,
 					   global_scale_theta_block));
   }
@@ -1189,12 +1195,7 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
     }
     Type corr_transf = theta.tail(1)(0);
     vector<Type> sd = exp(logsd);
-    Type a = Type(1) / (Type(n) - Type(1));
-    Type rho = invlogit(corr_transf) * (Type(1) + a) - a;
-    matrix<Type> corr(n,n);
-    for(int i=0; i<n; i++)
-      for(int j=0; j<n; j++)
-        corr(i,j) = (i==j ? Type(1) : rho);
+    matrix<Type> corr = compound_symmetry_corr(n, corr_transf);
     density::MVNORM_t<Type> nldens(corr);
     density::VECSCALE_t<density::MVNORM_t<Type> > scnldens = density::VECSCALE(nldens, sd);
     for(int i = 0; i < term.blockReps; i++){
@@ -1221,13 +1222,8 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
       }
     }
     vector<Type> sd = exp(logsd);
-    vector<Type> corr_params = theta.tail(n-1);
-    corr_params = corr_params / sqrt(Type(1.0) + corr_params * corr_params);
-    matrix<Type> corr(n,n);
-    for (int i=0; i<n; i++)
-      for(int j=0; j<n; j++)
-        corr(i,j) = (i==j ? Type(1) :
-                     corr_params( (i > j ? i-j : j-i) - 1 ) );
+    vector<Type> corr_transf = theta.tail(n-1);
+    matrix<Type> corr = toeplitz_corr(n, corr_transf);
     density::MVNORM_t<Type> nldens(corr);
     density::VECSCALE_t<density::MVNORM_t<Type> > scnldens = density::VECSCALE(nldens, sd);
     for(int i = 0; i < term.blockReps; i++){
@@ -1250,7 +1246,7 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
     int n = term.blockSize;
     vector<Type> logsd = theta.head(term.blockNumTheta-1);
     Type corr_transf = theta(term.blockNumTheta-1);
-    Type phi = corr_transf / sqrt(1.0 + pow(corr_transf, 2));
+    Type phi = parse_ar1_phi(corr_transf);
     vector<Type> sd = exp(logsd);
     
     for(int j = 0; j < term.blockReps; j++){
@@ -1310,12 +1306,7 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
         term.corr.resize(1,1);
         term.corr(0,0) = phi;
       } else {
-        term.corr.resize(n,n);
-        for (int i=0; i<n; i++) {
-          for(int j=0; j<n; j++){
-            term.corr(i,j) = pow(phi, abs(i-j));
-          }
-        }
+        term.corr = ar1_corr(n, phi);
       }
       if (term.blockCode == hetar1_covstruct) {
         term.sd.resize(n);
@@ -1398,26 +1389,9 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
     // First parameter is sd
     Type sd = exp( theta(0) );
     // Setup correlation matrix
-    matrix<Type> corr(n,n);
-    for(int i=0; i<n; i++) {
-      for(int j=0; j<n; j++) {
-        switch (term.blockCode) {
-        case exp_covstruct:
-          corr(i,j) = (i==j ? Type(1) : exp( -dist(i,j) * exp(-theta(1)) ) );
-          break;
-        case gau_covstruct:
-          corr(i,j) = (i==j ? Type(1) : exp( -pow(dist(i,j),2) * exp(-2. * theta(1)) ) );
-          break;
-        case mat_covstruct:
-          corr(i,j) = (i==j ? Type(1) : matern( dist(i,j),
-                                                exp(theta(1)) /* range */,
-                                                exp(theta(2)) /* smoothness */) );
-          break;
-        default:
-          error("Not implemented");
-        }
-      }
-    }
+    Type smoothness = (term.blockCode == mat_covstruct ? theta(2) : Type(0));
+    matrix<Type> corr = spatial_corr(term.blockCode, dist, theta(1),
+				     smoothness);
     density::MVNORM_t<Type> nldens(corr);
     density::SCALE_t<density::MVNORM_t<Type> > scnldens = density::SCALE(nldens, sd);
     for(int i = 0; i < term.blockReps; i++){
@@ -1536,7 +1510,7 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
   }
   else if (term.blockCode == separable_covstruct) {
     // R validates the separable margins and supplies coordinate-order metadata
-    // (`sepBuilderKinds`, `sepScaleKinds`, `sepScaleMode`, `sepScaleSpec`).
+    // (`sepScaleKinds`, `sepScaleSpec`).
     // Products up to five margins use nested TMB SEPARABLE calls; longer
     // products use a dense fallback.
     check_separable_metadata(term);
