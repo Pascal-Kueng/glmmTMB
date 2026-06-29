@@ -1148,22 +1148,7 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
         } else if(ss[i] == "separable") {
             ## Spec fields needed to reshape flat random-effect blocks and
             ## dispatch to the separable marginal densities in C++.
-            tmp$sepDims <- sepInfo[[i]]$dims
-            tmp$sepMarginStruc <- sepInfo[[i]]$margin_struc
-            tmp$sepMarginVars <- sepInfo[[i]]$margin_vars
-            tmp$sepCodes <- sepInfo[[i]]$codes
-            tmp$sepBuilderKinds <- sepInfo[[i]]$builder_kinds
-            tmp$sepScaleKinds <- sepInfo[[i]]$scale_kinds
-            tmp$sepDispatch <- sepInfo[[i]]$dispatch
-            tmp$sepScaleMode <- sepInfo[[i]]$scale_mode
-            tmp$sepScaleSpec <- sepInfo[[i]]$scale_spec
-            tmp$sepThetaBlockMargins <- sepInfo[[i]]$theta_block_margins
-            tmp$sepThetaBlockKinds <- sepInfo[[i]]$theta_block_kinds
-            tmp$sepThetaBlockStarts <- sepInfo[[i]]$theta_block_starts
-            tmp$sepThetaBlockLengths <- sepInfo[[i]]$theta_block_lengths
-            tmp$sepMatrixPayloadKinds <- sepInfo[[i]]$matrix_payload_kinds
-            tmp$sepMatrixPayloadStarts <- sepInfo[[i]]$matrix_payload_starts
-            tmp$sepMatrixPayloadValues <- sepInfo[[i]]$matrix_payload_values
+            tmp <- c(tmp, sepInfo[[i]]$tmb)
         }
         ans[[i]] <- tmp
     }

@@ -785,22 +785,25 @@ parseNumLevels <- function(levels) {
     matrix_info <- .sep_matrix_payload_info(regs, spec, dims)
 
     list(
-        dims = dims,
-        margin_struc = strucs,
-        margin_vars = margins$var,
-        codes = as.integer(vapply(strucs, function(z) .valid_covstruct[[z]], numeric(1))),
-        builder_kinds = as.integer(.sep_builder_kind_code[builder_kind]),
-        scale_kinds = as.integer(.sep_scale_kind_code[scale_kind]),
-        dispatch = as.integer(.sep_dispatch_code[dispatch]),
-        scale_mode = scale_info$mode_code,
-        scale_spec = scale_info$spec,
-        theta_block_margins = theta_layout$margin,
-        theta_block_kinds = theta_layout$kind,
-        theta_block_starts = theta_layout$start,
-        theta_block_lengths = theta_layout$length,
-        matrix_payload_kinds = matrix_info$kinds,
-        matrix_payload_starts = matrix_info$starts,
-        matrix_payload_values = matrix_info$values,
+        tmb = list(
+            sepDims = dims,
+            sepMarginStruc = strucs,
+            sepMarginVars = margins$var,
+            sepCodes = as.integer(vapply(strucs, function(z) .valid_covstruct[[z]],
+                                         numeric(1))),
+            sepBuilderKinds = as.integer(.sep_builder_kind_code[builder_kind]),
+            sepScaleKinds = as.integer(.sep_scale_kind_code[scale_kind]),
+            sepDispatch = as.integer(.sep_dispatch_code[dispatch]),
+            sepScaleMode = scale_info$mode_code,
+            sepScaleSpec = scale_info$spec,
+            sepThetaBlockMargins = theta_layout$margin,
+            sepThetaBlockKinds = theta_layout$kind,
+            sepThetaBlockStarts = theta_layout$start,
+            sepThetaBlockLengths = theta_layout$length,
+            sepMatrixPayloadKinds = matrix_info$kinds,
+            sepMatrixPayloadStarts = matrix_info$starts,
+            sepMatrixPayloadValues = matrix_info$values
+        ),
         ntheta = as.integer(ntheta)
     )
 }
