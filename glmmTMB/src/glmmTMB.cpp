@@ -355,38 +355,7 @@ struct per_term_info {
   int fullCor;       // Compute/store full correlation matrix?
   matrix<Type> dist;
   vector<Type> times;// For ar1 case
-  // Metadata for separable covariance structures.
-  //
-  // The random effects still arrive in the usual glmmTMB representation:
-  // one flat vector per grouping level.  For a two-dimensional separable term,
-  // the flat vector is conceptually an array with dimensions:
-  //
-  //   sepDims(0) = number of columns in the first product margin
-  //   sepDims(1) = number of columns in the second product margin
-  //
-  // The storage order follows the same convention as sepgrid()/numFactor():
-  //
-  //   flat index = coord1 + sepDims(0) * coord2
-  //
-  // `sepCodes` stores the covariance-structure code for each margin in this
-  // same order.  `sepBuilderKinds` is a smaller C++ margin-builder code:
-  //
-  //   1 = dense correlation margin (currently cs, homcs, or us)
-  //   2 = AR(1) correlation margin (currently ar1 or hetar1)
-  //   3 = diagonal correlation margin (currently diag or homdiag)
-  //   4 = spatial correlation margin (currently ou, exp, gau, or mat)
-  //   5 = Toeplitz correlation margin (currently toep or homtoep)
-  //   6 = fixed covariance margin
-  //
-  // `sepScaleMode` and `sepScaleSpec` describe how cell standard deviations are
-  // built: one selected margin, one global scale, all scale-capable margins, or
-  // an explicit product of selected margins.
-  // `sepScaleKinds` describes how each margin consumes SD parameters:
-  // no SDs, one homogeneous SD, or one SD per margin level.
-  // `sepThetaBlock*` describes the registry-derived theta layout.  The current
-  // builders still parse theta sequentially, but the explicit block layout is
-  // checked against theta and provides the extension point for builders with
-  // richer parameter contracts.
+  // Optional metadata for separable covariance structures.
   vector<int> sepDims;
   vector<int> sepCodes;
   vector<int> sepBuilderKinds;
@@ -436,76 +405,37 @@ struct terms_t : vector<per_term_info<Type> > {
 	RObjectTestExpectedType(d, &Rf_isMatrix, "dist");
 	(*this)(i).dist = asMatrix<Type>(d);
       }
-      // Optionally, pass separable margin metadata:
-      //
-      // These fields are absent for all existing covariance structures.  Keeping
-      // them optional means the rest of the template keeps using the same
-      // `per_term_info` object without special wrappers.
-      SEXP sdims = getListElement(y, "sepDims");
-      if(!Rf_isNull(sdims)){
-	RObjectTestExpectedType(sdims, &Rf_isNumeric, "sepDims");
-	(*this)(i).sepDims = asVector<int>(sdims);
+#define GET_OPTIONAL_INT_VECTOR(NAME, FIELD)			\
+      {								\
+	SEXP value = getListElement(y, NAME);			\
+	if(!Rf_isNull(value)){				\
+	  RObjectTestExpectedType(value, &Rf_isNumeric, NAME);	\
+	  (*this)(i).FIELD = asVector<int>(value);		\
+	}							\
       }
-      SEXP scodes = getListElement(y, "sepCodes");
-      if(!Rf_isNull(scodes)){
-	RObjectTestExpectedType(scodes, &Rf_isNumeric, "sepCodes");
-	(*this)(i).sepCodes = asVector<int>(scodes);
+#define GET_OPTIONAL_TYPE_VECTOR(NAME, FIELD)			\
+      {								\
+	SEXP value = getListElement(y, NAME);			\
+	if(!Rf_isNull(value)){				\
+	  RObjectTestExpectedType(value, &Rf_isNumeric, NAME);	\
+	  (*this)(i).FIELD = asVector<Type>(value);		\
+	}							\
       }
-      SEXP skinds = getListElement(y, "sepBuilderKinds");
-      if(!Rf_isNull(skinds)){
-	RObjectTestExpectedType(skinds, &Rf_isNumeric, "sepBuilderKinds");
-	(*this)(i).sepBuilderKinds = asVector<int>(skinds);
-      }
-      SEXP sscalekinds = getListElement(y, "sepScaleKinds");
-      if(!Rf_isNull(sscalekinds)){
-	RObjectTestExpectedType(sscalekinds, &Rf_isNumeric, "sepScaleKinds");
-	(*this)(i).sepScaleKinds = asVector<int>(sscalekinds);
-      }
-      SEXP sscalemode = getListElement(y, "sepScaleMode");
-      if(!Rf_isNull(sscalemode)){
-	RObjectTestExpectedType(sscalemode, &Rf_isNumeric, "sepScaleMode");
-	(*this)(i).sepScaleMode = asVector<int>(sscalemode);
-      }
-      SEXP sscalespec = getListElement(y, "sepScaleSpec");
-      if(!Rf_isNull(sscalespec)){
-	RObjectTestExpectedType(sscalespec, &Rf_isNumeric, "sepScaleSpec");
-	(*this)(i).sepScaleSpec = asVector<int>(sscalespec);
-      }
-      SEXP sthetamargins = getListElement(y, "sepThetaBlockMargins");
-      if(!Rf_isNull(sthetamargins)){
-	RObjectTestExpectedType(sthetamargins, &Rf_isNumeric, "sepThetaBlockMargins");
-	(*this)(i).sepThetaBlockMargins = asVector<int>(sthetamargins);
-      }
-      SEXP sthetakinds = getListElement(y, "sepThetaBlockKinds");
-      if(!Rf_isNull(sthetakinds)){
-	RObjectTestExpectedType(sthetakinds, &Rf_isNumeric, "sepThetaBlockKinds");
-	(*this)(i).sepThetaBlockKinds = asVector<int>(sthetakinds);
-      }
-      SEXP sthetastarts = getListElement(y, "sepThetaBlockStarts");
-      if(!Rf_isNull(sthetastarts)){
-	RObjectTestExpectedType(sthetastarts, &Rf_isNumeric, "sepThetaBlockStarts");
-	(*this)(i).sepThetaBlockStarts = asVector<int>(sthetastarts);
-      }
-      SEXP sthetalengths = getListElement(y, "sepThetaBlockLengths");
-      if(!Rf_isNull(sthetalengths)){
-	RObjectTestExpectedType(sthetalengths, &Rf_isNumeric, "sepThetaBlockLengths");
-	(*this)(i).sepThetaBlockLengths = asVector<int>(sthetalengths);
-      }
-      SEXP smatrixkinds = getListElement(y, "sepMatrixPayloadKinds");
-      if(!Rf_isNull(smatrixkinds)){
-	RObjectTestExpectedType(smatrixkinds, &Rf_isNumeric, "sepMatrixPayloadKinds");
-	(*this)(i).sepMatrixPayloadKinds = asVector<int>(smatrixkinds);
-      }
-      SEXP smatrixstarts = getListElement(y, "sepMatrixPayloadStarts");
-      if(!Rf_isNull(smatrixstarts)){
-	RObjectTestExpectedType(smatrixstarts, &Rf_isNumeric, "sepMatrixPayloadStarts");
-	(*this)(i).sepMatrixPayloadStarts = asVector<int>(smatrixstarts);
-      }
-      SEXP smatrixvalues = getListElement(y, "sepMatrixPayloadValues");
-      if(!Rf_isNull(smatrixvalues)){
-	RObjectTestExpectedType(smatrixvalues, &Rf_isNumeric, "sepMatrixPayloadValues");
-	(*this)(i).sepMatrixPayloadValues = asVector<Type>(smatrixvalues);
-      }
+      GET_OPTIONAL_INT_VECTOR("sepDims", sepDims)
+      GET_OPTIONAL_INT_VECTOR("sepCodes", sepCodes)
+      GET_OPTIONAL_INT_VECTOR("sepBuilderKinds", sepBuilderKinds)
+      GET_OPTIONAL_INT_VECTOR("sepScaleKinds", sepScaleKinds)
+      GET_OPTIONAL_INT_VECTOR("sepScaleMode", sepScaleMode)
+      GET_OPTIONAL_INT_VECTOR("sepScaleSpec", sepScaleSpec)
+      GET_OPTIONAL_INT_VECTOR("sepThetaBlockMargins", sepThetaBlockMargins)
+      GET_OPTIONAL_INT_VECTOR("sepThetaBlockKinds", sepThetaBlockKinds)
+      GET_OPTIONAL_INT_VECTOR("sepThetaBlockStarts", sepThetaBlockStarts)
+      GET_OPTIONAL_INT_VECTOR("sepThetaBlockLengths", sepThetaBlockLengths)
+      GET_OPTIONAL_INT_VECTOR("sepMatrixPayloadKinds", sepMatrixPayloadKinds)
+      GET_OPTIONAL_INT_VECTOR("sepMatrixPayloadStarts", sepMatrixPayloadStarts)
+      GET_OPTIONAL_TYPE_VECTOR("sepMatrixPayloadValues", sepMatrixPayloadValues)
+#undef GET_OPTIONAL_INT_VECTOR
+#undef GET_OPTIONAL_TYPE_VECTOR
     }
   }
 };
