@@ -111,11 +111,6 @@ enum separable_builder_kind {
   fixed_cov_builder = 6
 };
 
-enum separable_dispatch {
-  // Evaluator codes for separable covariance structures.
-  corr_matrix_product_dispatch = 1
-};
-
 enum separable_scale_mode {
   // These values must match `.sep_scale_mode_code` in R/utils_covstruct.R.
   no_sep_scale = 0,
@@ -383,10 +378,6 @@ struct per_term_info {
   //   5 = Toeplitz correlation margin (currently toep or homtoep)
   //   6 = fixed covariance margin
   //
-  // `sepDispatch` selects the C++ evaluator.  The current backend uses one
-  // evaluator for any margin product that can be represented by correlation
-  // matrices plus a separate cell standard-deviation vector.
-  //
   // `sepScaleMode` and `sepScaleSpec` describe how cell standard deviations are
   // built: one selected margin, one global scale, all scale-capable margins, or
   // an explicit product of selected margins.
@@ -400,7 +391,6 @@ struct per_term_info {
   vector<int> sepCodes;
   vector<int> sepBuilderKinds;
   vector<int> sepScaleKinds;
-  vector<int> sepDispatch;
   vector<int> sepScaleMode;
   vector<int> sepScaleSpec;
   vector<int> sepThetaBlockMargins;
@@ -470,11 +460,6 @@ struct terms_t : vector<per_term_info<Type> > {
       if(!Rf_isNull(sscalekinds)){
 	RObjectTestExpectedType(sscalekinds, &Rf_isNumeric, "sepScaleKinds");
 	(*this)(i).sepScaleKinds = asVector<int>(sscalekinds);
-      }
-      SEXP sdispatch = getListElement(y, "sepDispatch");
-      if(!Rf_isNull(sdispatch)){
-	RObjectTestExpectedType(sdispatch, &Rf_isNumeric, "sepDispatch");
-	(*this)(i).sepDispatch = asVector<int>(sdispatch);
       }
       SEXP sscalemode = getListElement(y, "sepScaleMode");
       if(!Rf_isNull(sscalemode)){
@@ -914,7 +899,6 @@ void check_separable_metadata(per_term_info<Type>& term) {
   if (term.sepDims.size() < 2 || term.sepCodes.size() != term.sepDims.size() ||
       term.sepBuilderKinds.size() != term.sepDims.size() ||
       term.sepScaleKinds.size() != term.sepDims.size() ||
-      term.sepDispatch.size() != 1 ||
       term.sepScaleMode.size() != 1)
     error("separable covariance structure is missing margin metadata");
   int n = 1;
@@ -1621,55 +1605,47 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
     term.sd = sd;             // For report
   }
   else if (term.blockCode == separable_covstruct) {
-    // R validates the separable margins and supplies an evaluator code
-    // (`sepDispatch`) plus coordinate-order metadata (`sepBuilderKinds`,
-    // `sepScaleKinds`, `sepScaleMode`, `sepScaleSpec`). Products up to five
-    // margins use nested TMB SEPARABLE calls; longer products use a dense
-    // fallback.
+    // R validates the separable margins and supplies coordinate-order metadata
+    // (`sepBuilderKinds`, `sepScaleKinds`, `sepScaleMode`, `sepScaleSpec`).
+    // Products up to five margins use nested TMB SEPARABLE calls; longer
+    // products use a dense fallback.
     check_separable_metadata(term);
-    switch (term.sepDispatch(0)) {
-    case corr_matrix_product_dispatch: {
-      bool dense_fallback = term.sepDims.size() > 5;
-      bool build_corr = dense_fallback || do_simulate || term.fullCor == 1;
-      sep_corr_product_pars<Type> sep =
-	parse_separable_corr_product(theta, term, build_corr);
-      if (term.sepDims.size() == 2) {
-	density::MVNORM_t<Type> density0(sep.margin_corr[0]);
-	density::MVNORM_t<Type> density1(sep.margin_corr[1]);
-	ans += separable_2d_nll(U, sep.cell_sd, density0, density1, term);
-      } else if (term.sepDims.size() == 3) {
-	density::MVNORM_t<Type> density0(sep.margin_corr[0]);
-	density::MVNORM_t<Type> density1(sep.margin_corr[1]);
-	density::MVNORM_t<Type> density2(sep.margin_corr[2]);
-	ans += separable_3d_nll(U, sep.cell_sd, density0, density1,
-				density2, term);
-      } else if (term.sepDims.size() == 4) {
-	density::MVNORM_t<Type> density0(sep.margin_corr[0]);
-	density::MVNORM_t<Type> density1(sep.margin_corr[1]);
-	density::MVNORM_t<Type> density2(sep.margin_corr[2]);
-	density::MVNORM_t<Type> density3(sep.margin_corr[3]);
-	ans += separable_4d_nll(U, sep.cell_sd, density0, density1,
-				density2, density3, term);
-      } else if (term.sepDims.size() == 5) {
-	density::MVNORM_t<Type> density0(sep.margin_corr[0]);
-	density::MVNORM_t<Type> density1(sep.margin_corr[1]);
-	density::MVNORM_t<Type> density2(sep.margin_corr[2]);
-	density::MVNORM_t<Type> density3(sep.margin_corr[3]);
-	density::MVNORM_t<Type> density4(sep.margin_corr[4]);
-	ans += separable_5d_nll(U, sep.cell_sd, density0, density1,
-				density2, density3, density4, term);
-      } else {
-	ans += separable_dense_nll(U, sep.cell_sd, sep.corr, term);
-      }
-      if (do_simulate)
-	simulate_separable_product(U, sep.cell_sd, sep.corr, term);
-      DISABLE_AD {
-	report_separable_product(sep.cell_sd, sep.corr, term);
-      }
-      break;
+    bool dense_fallback = term.sepDims.size() > 5;
+    bool build_corr = dense_fallback || do_simulate || term.fullCor == 1;
+    sep_corr_product_pars<Type> sep =
+      parse_separable_corr_product(theta, term, build_corr);
+    if (term.sepDims.size() == 2) {
+      density::MVNORM_t<Type> density0(sep.margin_corr[0]);
+      density::MVNORM_t<Type> density1(sep.margin_corr[1]);
+      ans += separable_2d_nll(U, sep.cell_sd, density0, density1, term);
+    } else if (term.sepDims.size() == 3) {
+      density::MVNORM_t<Type> density0(sep.margin_corr[0]);
+      density::MVNORM_t<Type> density1(sep.margin_corr[1]);
+      density::MVNORM_t<Type> density2(sep.margin_corr[2]);
+      ans += separable_3d_nll(U, sep.cell_sd, density0, density1,
+			      density2, term);
+    } else if (term.sepDims.size() == 4) {
+      density::MVNORM_t<Type> density0(sep.margin_corr[0]);
+      density::MVNORM_t<Type> density1(sep.margin_corr[1]);
+      density::MVNORM_t<Type> density2(sep.margin_corr[2]);
+      density::MVNORM_t<Type> density3(sep.margin_corr[3]);
+      ans += separable_4d_nll(U, sep.cell_sd, density0, density1,
+			      density2, density3, term);
+    } else if (term.sepDims.size() == 5) {
+      density::MVNORM_t<Type> density0(sep.margin_corr[0]);
+      density::MVNORM_t<Type> density1(sep.margin_corr[1]);
+      density::MVNORM_t<Type> density2(sep.margin_corr[2]);
+      density::MVNORM_t<Type> density3(sep.margin_corr[3]);
+      density::MVNORM_t<Type> density4(sep.margin_corr[4]);
+      ans += separable_5d_nll(U, sep.cell_sd, density0, density1,
+			      density2, density3, density4, term);
+    } else {
+      ans += separable_dense_nll(U, sep.cell_sd, sep.corr, term);
     }
-    default:
-      error("unsupported separable covariance dispatch");
+    if (do_simulate)
+      simulate_separable_product(U, sep.cell_sd, sep.corr, term);
+    DISABLE_AD {
+      report_separable_product(sep.cell_sd, sep.corr, term);
     }
   }
   else error("covStruct not implemented!");

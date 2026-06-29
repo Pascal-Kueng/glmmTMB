@@ -390,10 +390,7 @@ parseNumLevels <- function(levels) {
     )
 }
 
-.sep_cov_matrix_extra <- .sep_extra(
-    n = 1L,
-    payloads = .sep_payload("cov_matrix", 1L)
-)
+.sep_cov_matrix_extra <- .sep_extra(n = 1L, cov_args = 1L)
 
 .sep_validate_propto_payload <- function(payload, value, cnms, expr, env) {
     if (!identical(payload$kind, "cov_matrix")) return(value)
@@ -485,8 +482,6 @@ parseNumLevels <- function(levels) {
     fixed_cov = 6L
 )
 
-.sep_dispatch_code <- c(corr_matrix_product = 1L)
-
 .sep_scale_mode_code <- c(
     none = 0L,            # fixed scales supplied by one or more margins
     margin = 1L,          # one margin supplies absolute SDs
@@ -515,10 +510,9 @@ parseNumLevels <- function(levels) {
     cov_matrix = 2L
 )
 
-.sep_dispatch <- function(regs) {
+.sep_supported_margin_product <- function(regs) {
     kinds <- vapply(regs, `[[`, character(1), "builder")
-    if (!all(kinds %in% names(.sep_builder_kind_code))) return(NA_character_)
-    "corr_matrix_product"
+    all(kinds %in% names(.sep_builder_kind_code))
 }
 
 .sep_margin_label <- function(x) {
@@ -532,17 +526,6 @@ parseNumLevels <- function(levels) {
         paste(vapply(z, .sep_deparse, character(1)), collapse = "\r")
     }, character(1))
     paste(x$struc, x$var, extra, sep = "\r")
-}
-
-.sep_scale_label <- function(scale) {
-    if (is.null(scale)) return("NULL")
-    if (is.null(scale$margins) || nrow(scale$margins) == 0L) {
-        return(paste0(scale$mode, "()"))
-    }
-    paste0(scale$mode, "(",
-           paste0(scale$margins$struc, "(", scale$margins$var, ")",
-                  collapse = ", "),
-           ")")
 }
 
 .sep_scale_info <- function(margins, regs, scale = NULL) {
@@ -635,7 +618,7 @@ parseNumLevels <- function(levels) {
     )
 }
 
-.sep_stop_unsupported_dispatch <- function(margins, regs, scale = NULL) {
+.sep_stop_unsupported_product <- function(margins, regs, scale = NULL) {
     ## Diagnose scale errors before reporting unsupported density combinations.
     .sep_scale_info(margins, regs, scale)
     supported <- names(.sep_margin_registry)[
@@ -766,9 +749,8 @@ parseNumLevels <- function(levels) {
 
     strucs <- margins$struc
     regs <- .sep_margin_registry[strucs]
-    dispatch <- .sep_dispatch(regs)
-    if (is.na(dispatch)) {
-        .sep_stop_unsupported_dispatch(margins, regs, spec$scale)
+    if (!.sep_supported_margin_product(regs)) {
+        .sep_stop_unsupported_product(margins, regs, spec$scale)
     }
     if (!identical(margins$var, spec$grid)) {
         stop("The separable() margin variables must match the product design. ",
@@ -793,7 +775,6 @@ parseNumLevels <- function(levels) {
                                          numeric(1))),
             sepBuilderKinds = as.integer(.sep_builder_kind_code[builder_kind]),
             sepScaleKinds = as.integer(.sep_scale_kind_code[scale_kind]),
-            sepDispatch = as.integer(.sep_dispatch_code[dispatch]),
             sepScaleMode = scale_info$mode_code,
             sepScaleSpec = scale_info$spec,
             sepThetaBlockMargins = theta_layout$margin,
@@ -863,10 +844,6 @@ parseNumLevels <- function(levels) {
     rownames(margins) <- NULL
     if (anyDuplicated(margins$var)) {
         stop("separable() product margins must use distinct variables.")
-    }
-    if (!all(margins$struc %in% names(.sep_margin_registry))) {
-        bad <- unique(margins$struc[!margins$struc %in% names(.sep_margin_registry)])
-        stop("Unsupported separable() margin: ", paste(bad, collapse = ", "))
     }
 
     scale_spec <- .sep_parse_scale_arg(scale)

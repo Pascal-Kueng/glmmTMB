@@ -166,7 +166,7 @@ make_sep_case <- function(struc = c("cs", "homcs", "us"), reversed = FALSE,
     list(form = form, dense_form = dense_form, theta = theta,
          theta_dense = c(log(sd_full), put_cor(R_full)),
          R_full = R_full, sd_full = sd_full,
-         codes = codes, kinds = kinds, dispatch = 1L,
+         codes = codes, kinds = kinds,
          scale_kinds = scale_kinds,
          scale_mode = scale_mode_code,
          scale_spec = scale_spec,
@@ -195,7 +195,6 @@ expect_separable_case_vc <- function(case) {
     expect_equal(restruc$sepCodes, case$codes)
     expect_equal(restruc$sepBuilderKinds, case$kinds)
     expect_equal(restruc$sepScaleKinds, expected_sep_scale_kinds(case))
-    expect_equal(restruc$sepDispatch, case$dispatch)
     expect_equal(restruc$sepScaleMode, case$scale_mode)
     expect_equal(restruc$sepScaleSpec, case$scale_spec)
     sep_meta <- attr(vc, "separable")
@@ -411,7 +410,6 @@ make_sep_margin_pair_case <- function(m0, m1,
          codes = unname(c(.valid_covstruct[[m0$struc]],
                           .valid_covstruct[[m1$struc]])),
          kinds = c(sep_kind_code(m0$struc), sep_kind_code(m1$struc)),
-         dispatch = 1L,
          scale_mode = switch(scale_mode,
              global = 2L, product = 3L,
              selected_first = 4L, selected_second = 4L),
@@ -500,7 +498,6 @@ make_sep_margin_chain_case <- function(margins, vars = paste0("v", seq_along(mar
                                numeric(1))),
          kinds = vapply(margins, function(m) sep_kind_code(m$struc),
                         integer(1)),
-         dispatch = 1L,
          scale_mode = switch(scale_mode,
              global = 2L, product = 3L, selected_product = 4L),
          scale_spec = as.integer(scale_index - 1L))
@@ -581,7 +578,6 @@ make_sep_dense_dense_case <- function(struc0 = c("cs", "homcs", "us"),
          codes = unname(c(.valid_covstruct[[struc0]],
                           .valid_covstruct[[struc1]])),
          kinds = c(1L, 1L),
-         dispatch = 1L,
          scale_mode = switch(scale_mode,
              global = 2L, product = 3L,
              selected_first = 4L, selected_second = 4L),
@@ -657,7 +653,6 @@ make_sep_ar1_ar1_case <- function(struc0 = c("ar1", "hetar1"),
          codes = unname(c(.valid_covstruct[[struc0]],
                           .valid_covstruct[[struc1]])),
          kinds = c(2L, 2L),
-         dispatch = 1L,
          scale_mode = switch(scale_mode,
              margin = 1L, global = 2L, product = 3L,
              selected_first = 4L, selected_second = 4L),
@@ -741,7 +736,6 @@ make_sep_diag_ar1_case <- function(struc = c("diag", "homdiag"),
                  else unname(c(.valid_covstruct[[struc]],
                                .valid_covstruct[[ar1_struc]])),
          kinds = if (reversed) c(2L, 3L) else c(3L, 2L),
-         dispatch = 1L,
          scale_mode = switch(scale_mode,
              margin = 1L, global = 2L, product = 3L, selected = 4L),
          scale_spec = scale_spec)
@@ -827,7 +821,6 @@ make_sep_diag_dense_case <- function(diag_struc = c("diag", "homdiag"),
                  else unname(c(.valid_covstruct[[diag_struc]],
                                .valid_covstruct[[dense_struc]])),
          kinds = if (reversed) c(1L, 3L) else c(3L, 1L),
-         dispatch = 1L,
          scale_mode = switch(scale_mode,
              global = 2L, product = 3L,
              selected_diag = 4L, selected_dense = 4L),
@@ -901,7 +894,6 @@ make_sep_diag_diag_case <- function(struc0 = c("diag", "homdiag"),
          codes = unname(c(.valid_covstruct[[struc0]],
                           .valid_covstruct[[struc1]])),
          kinds = c(3L, 3L),
-         dispatch = 1L,
          scale_mode = switch(scale_mode,
              global = 2L, product = 3L, selected_first = 4L),
          scale_spec = switch(scale_mode,
@@ -955,7 +947,6 @@ test_that("separable specs handle product order", {
                  unname(c(.valid_covstruct[["ar1"]], .valid_covstruct[["homcs"]])))
     expect_equal(h$condReStruc[[1]]$sepBuilderKinds, c(2L, 1L))
     expect_equal(h$condReStruc[[1]]$sepScaleKinds, c(1L, 1L))
-    expect_equal(h$condReStruc[[1]]$sepDispatch, 1L)
     expect_equal(h$condReStruc[[1]]$sepScaleMode, 1L)
     expect_equal(h$condReStruc[[1]]$sepScaleSpec, 1L)
 
@@ -964,7 +955,6 @@ test_that("separable specs handle product order", {
                  unname(c(.valid_covstruct[["us"]], .valid_covstruct[["ar1"]])))
     expect_equal(u$condReStruc[[1]]$sepBuilderKinds, c(1L, 2L))
     expect_equal(u$condReStruc[[1]]$sepScaleKinds, c(2L, 1L))
-    expect_equal(u$condReStruc[[1]]$sepDispatch, 1L)
     expect_equal(u$condReStruc[[1]]$sepScaleMode, 1L)
     expect_equal(u$condReStruc[[1]]$sepScaleSpec, 0L)
 })
@@ -1118,7 +1108,6 @@ test_that("separable records and uses generic margin matrix payloads", {
                          .valid_covstruct[["ou"]])),
         kinds = c(sep_kind_code("propto"), sep_kind_code("ou")),
         scale_kinds = c(1L, 1L),
-        dispatch = 1L,
         scale_mode = 2L,
         scale_spec = integer()
     )
@@ -1593,7 +1582,6 @@ test_that("separable supports propto matrix margins", {
                          .valid_covstruct[["ar1"]])),
         kinds = c(sep_kind_code("propto"), sep_kind_code("ar1")),
         scale_kinds = c(1L, 1L),
-        dispatch = 1L,
         scale_mode = 1L,
         scale_spec = 0L
     )
@@ -1639,7 +1627,6 @@ test_that("separable supports equalto matrix margins without estimated scale", {
                          .valid_covstruct[["ar1"]])),
         kinds = c(sep_kind_code("equalto"), sep_kind_code("ar1")),
         scale_kinds = c(0L, 1L),
-        dispatch = 1L,
         scale_mode = 0L,
         scale_spec = integer()
     )

@@ -1147,7 +1147,7 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL,
             tmp$dist <- as.matrix( dist(coords) )
         } else if(ss[i] == "separable") {
             ## Spec fields needed to reshape flat random-effect blocks and
-            ## dispatch to the separable marginal densities in C++.
+            ## evaluate separable marginal densities in C++.
             tmp <- c(tmp, sepInfo[[i]]$tmb)
         }
         ans[[i]] <- tmp
