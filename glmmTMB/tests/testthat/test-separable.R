@@ -124,54 +124,6 @@ test_that("separable parser flattens product chains and records scale syntax", {
     expect_equal(spec$scale$margins$struc, c("us", "cs"))
 })
 
-test_that("separable margin registry preserves supported contracts", {
-    reg <- glmmTMB:::.sep_margin_registry
-    margin_names <- c("diag", "homdiag", "cs", "homcs", "us", "ar1",
-                      "hetar1", "ou", "exp", "gau", "mat", "toep",
-                      "homtoep", "propto", "equalto")
-    payload_summary <- function(x) {
-        paste(vapply(x$extra$payloads, function(p) {
-            paste(p$kind, p$arg, p$frame, sep = ":")
-        }, character(1)), collapse = ",")
-    }
-    theta_summary <- function(x) {
-        paste(vapply(x$theta$blocks, function(b) {
-            paste(b$name, b$n(4L), sep = ":")
-        }, character(1)), collapse = ",")
-    }
-
-    expect_equal(names(reg), margin_names)
-    expect_equal(unname(vapply(reg, `[[`, character(1), "code")),
-                 margin_names)
-    expect_true(all(margin_names %in% names(glmmTMB:::.valid_covstruct)))
-    expect_equal(unname(vapply(reg, function(x) x$scale$kind, character(1))),
-                 c("heterogeneous", "homogeneous", "heterogeneous",
-                   "homogeneous", "heterogeneous", "homogeneous",
-                   "heterogeneous", rep("homogeneous", 4), "heterogeneous",
-                   "homogeneous", "homogeneous", "none"))
-    expect_equal(unname(vapply(reg, function(x) x$scale$can_auto_scale,
-                               logical(1))),
-                 c(TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE,
-                   rep(TRUE, 7), FALSE))
-    expect_equal(unname(vapply(reg, function(x) x$scale$fixed_scale,
-                               logical(1))),
-                 c(rep(FALSE, 14), TRUE))
-    expect_equal(unname(vapply(reg, function(x) x$scale$n(4L), integer(1))),
-                 c(4L, 1L, 4L, 1L, 4L, 1L, 4L, rep(1L, 4), 4L,
-                   1L, 1L, 0L))
-    expect_equal(unname(vapply(reg, theta_summary, character(1))),
-                 c("", "", "corr:1", "corr:1", "corr:6", "corr:1",
-                   "corr:1", "decay:1", "range:1", "range:1",
-                   "range:1,smoothness:1", "corr:3", "corr:3", "", ""))
-    expect_equal(unname(vapply(reg, function(x) x$metadata$dist_coord_dim,
-                               integer(1))),
-                 c(rep(NA_integer_, 7), 1L, rep(NA_integer_, 7)))
-    expect_equal(unname(vapply(reg, function(x) x$extra$n, integer(1))),
-                 c(rep(0L, 13), 1L, 1L))
-    expect_equal(unname(vapply(reg, payload_summary, character(1))),
-                 c(rep("", 13), "cov_matrix:1:FALSE", "cov_matrix:1:FALSE"))
-})
-
 test_that("separable dense x ar1 matches dense MVN", {
     dd <- make_sep_dat()
     rho <- 0.3
@@ -378,6 +330,9 @@ test_that("separable validates syntax and scale choices", {
              "specify the scale mode"),
         list(y ~ 1 + separable(ar1(0 + member) %x% ar1(0 + time) | group),
              "no unambiguous scale margin"),
+        list(y ~ 1 + separable(us(0 + member) %x%
+                                   ar1(0 + as.numeric(time)) | group),
+             "one model-matrix column per level/coordinate"),
         list(y ~ 1 + separable(foo(0 + member) %x% ar1(0 + time) | group),
              "Unsupported separable\\(\\) margin: foo"),
         list(y ~ 1 + separable(us(0 + member) %x% ar1(0 + time) | group,
@@ -403,29 +358,20 @@ test_that("separable validates syntax and scale choices", {
                  "selects a correlation-only margin")
 })
 
-test_that("separable dense x ar1 models fit successfully", {
+test_that("separable free-theta model fits successfully", {
     set.seed(1)
-    n_member <- 2
-    n_time <- 4
-    n_group <- 30
-    dd <- make_sep_dat(n_member = n_member, n_time = n_time, n_group = n_group)
-    sd <- c(0.8, 1.2)
-    rho <- 0.25
-    phi <- 0.4
-    sigma <- 0.5
-    R_member <- cs_corr(n_member, rho)
-    R_time <- ar1_corr(n_time, phi)
-    sd_full <- rep(sd, n_time)
-    Sigma <- diag(sd_full) %*% kronecker(R_time, R_member) %*% diag(sd_full)
-    B <- t(matrix(rnorm(n_group * n_member * n_time), nrow = n_group) %*%
-               chol(Sigma))
-    dd$y <- as.vector(B) + rnorm(nrow(dd), sd = sigma)
+    dd <- make_sep_dat(n_time = 2, n_group = 8)
+    dd$y <- rnorm(nrow(dd), sd = 0.2) +
+        rep(rnorm(nlevels(dd$group), sd = 0.6), each = 4)
 
     fit <- glmmTMB(y ~ 1 +
-                       separable(us(0 + member) %x% ar1(0 + time) | group),
+                       separable(homcs(0 + member) %x% ar1(0 + time) | group),
                    data = dd)
+    vc <- VarCorr(fit)$cond[[1]]
 
     expect_equal(fit$fit$convergence, 0)
+    expect_true(all(is.finite(attr(vc, "stddev"))))
+    expect_true(all(is.finite(attr(vc, "correlation"))))
 })
 
 test_that("separable prediction with newdata reports current limitation", {

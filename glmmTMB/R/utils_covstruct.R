@@ -315,13 +315,15 @@ parseNumLevels <- function(levels) {
 .sep_margin_entry <- function(scale, theta = .sep_theta(),
                               metadata = .sep_metadata(),
                               extra = .sep_extra(),
-                              validate_payload = NULL) {
+                              validate_payload = NULL,
+                              require_grid_columns = FALSE) {
     list(
         scale = scale,
         theta = theta,
         metadata = metadata,
         extra = extra,
-        validate_payload = validate_payload
+        validate_payload = validate_payload,
+        require_grid_columns = require_grid_columns
     )
 }
 
@@ -358,17 +360,25 @@ parseNumLevels <- function(levels) {
         homcs = .sep_margin_entry(hom, .sep_theta(corr = 1L)),
         us = .sep_margin_entry(het, .sep_theta(corr = n_pairs)),
         ar1 = .sep_margin_entry(.sep_scale("homogeneous", 1L, auto = FALSE),
-                                .sep_theta(corr = 1L)),
-        hetar1 = .sep_margin_entry(het, .sep_theta(corr = 1L)),
+                                .sep_theta(corr = 1L),
+                                require_grid_columns = TRUE),
+        hetar1 = .sep_margin_entry(het, .sep_theta(corr = 1L),
+                                   require_grid_columns = TRUE),
         ou = .sep_margin_entry(hom, .sep_theta(decay = 1L),
-                               .sep_metadata(1L)),
-        exp = .sep_margin_entry(hom, .sep_theta(range = 1L), spatial),
-        gau = .sep_margin_entry(hom, .sep_theta(range = 1L), spatial),
+                               .sep_metadata(1L),
+                               require_grid_columns = TRUE),
+        exp = .sep_margin_entry(hom, .sep_theta(range = 1L), spatial,
+                                require_grid_columns = TRUE),
+        gau = .sep_margin_entry(hom, .sep_theta(range = 1L), spatial,
+                                require_grid_columns = TRUE),
         mat = .sep_margin_entry(hom,
                                 .sep_theta(range = 1L, smoothness = 1L),
-                                spatial),
-        toep = .sep_margin_entry(het, .sep_theta(corr = n_lags)),
-        homtoep = .sep_margin_entry(hom, .sep_theta(corr = n_lags)),
+                                spatial,
+                                require_grid_columns = TRUE),
+        toep = .sep_margin_entry(het, .sep_theta(corr = n_lags),
+                                 require_grid_columns = TRUE),
+        homtoep = .sep_margin_entry(hom, .sep_theta(corr = n_lags),
+                                    require_grid_columns = TRUE),
         propto = .sep_margin_entry(hom,
                                    extra = .sep_cov_matrix_extra,
                                    validate_payload =
@@ -514,6 +524,8 @@ parseNumLevels <- function(levels) {
 .sep_matrix_payload_info <- function(regs, spec, dims) {
     needs_dist <- vapply(regs, function(x) x$metadata$needs_dist, logical(1))
     matrix_payloads <- .sep_registry_matrix_payloads(regs)
+    ## This full matrix-payload kind table (sepMatrixPayloadKinds) indexes
+    ## per-margin starts, not just kinds present in the current separable term.
     n_kind <- length(.sep_matrix_payload_kind_code)
     starts <- rep.int(-1L, length(dims) * n_kind)
     values <- numeric()
@@ -765,6 +777,9 @@ parseNumLevels <- function(levels) {
 
 .sep_margin_matrix <- function(expr, fr, env) {
     f <- .sep_margin_formula(expr, env)
+    ## Matrix::sparse.model.matrix() treats a terms-bearing data frame as a
+    ## prebuilt model frame, which rejects transformed margin expressions.
+    attr(fr, "terms") <- NULL
     X <- Matrix::sparse.model.matrix(f, data = fr)
     if ("(Intercept)" %in% colnames(X)) {
         stop("separable() product margins must be no-intercept formulas, ",
@@ -828,9 +843,25 @@ parseNumLevels <- function(levels) {
     payloads
 }
 
+.sep_validate_margin_matrices <- function(margins, Xlist) {
+    regs <- .sep_margin_registry[margins$struc]
+    needs_grid_columns <- vapply(regs, `[[`, logical(1),
+                                 "require_grid_columns")
+    bad <- which(needs_grid_columns &
+                 vapply(Xlist, ncol, integer(1)) == 1L)
+    if (length(bad)) {
+        i <- bad[[1]]
+        stop("separable() ", margins$struc[i], "() margin must define ",
+             "one model-matrix column per level/coordinate; use a factor ",
+             "or numFactor() rather than a numeric covariate.",
+             call. = FALSE)
+    }
+}
+
 .sep_build_product_reterm <- function(spec, fr, group, env) {
     margins <- .sep_spec_df(spec$margins)
     Xlist <- lapply(margins$expr, .sep_margin_matrix, fr = fr, env = env)
+    .sep_validate_margin_matrices(margins, Xlist)
     dims <- vapply(Xlist, ncol, integer(1))
     cnms <- .sep_product_colnames(lapply(Xlist, colnames))
 
