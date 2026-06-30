@@ -1466,12 +1466,8 @@ glmmTMB <- function(
     }
 
     mf$formula <- combForm
-    ## Separable terms use factor levels to define marginal product columns.  If
-    ## model.frame() drops unused levels, globally missing cells disappear and
-    ## AR(1) spacing is wrong (e.g. days 1 and 3 become adjacent when day 2 is
-    ## unobserved).  Evaluate with unused levels preserved whenever a separable
-    ## term is present, then restore the usual drop_unused_levels behavior for
-    ## every unrelated factor column below.
+    ## Separable grids use factor levels, so unused levels must survive
+    ## model.frame(); ordinary factors are restored below.
     if ((length(sepgrid_cols) > 0L || length(sep_margin_vars) > 0L) &&
         control$drop_unused_levels) {
         mf$drop.unused.levels <- FALSE

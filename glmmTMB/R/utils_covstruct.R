@@ -114,14 +114,13 @@ parseNumLevels <- function(levels) {
     ans
 }
 
-## The helpers below parse the public product syntax
+## Parse separable product syntax, e.g.
 ##
 ##   separable(us(0 + member) %x% ar1(0 + time) | group,
 ##             scale = us(0 + member))
 ##
-## into an internal spec.  Separable terms are split with `splitForm()` like
-## other covariance specials, but are excluded from `mkReTrms()` because the
-## marginal covariance calls are not ordinary model-matrix expressions.
+## Separable terms are split with `splitForm()` like other covariance specials,
+## but are excluded from `mkReTrms()`.
 .sep_deparse <- function(x) deparse1(x, collapse = "", width.cutoff = 500L)
 
 .sep_call_name <- function(x) {
@@ -130,9 +129,6 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_find_calls <- function(x, name) {
-    ## Return all calls with the requested head.  This is used by glmmTMB() to
-    ## identify generated `sepgrid(...)` model-frame columns that must keep their
-    ## full Cartesian levels even when ordinary factors are level-dropped.
     if (!is.call(x)) return(list())
     ans <- if (identical(.sep_call_name(x), name)) list(x) else list()
     for (i in seq_along(x)[-1]) {
@@ -614,7 +610,6 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_restruc_info <- function(spec, cnms, blksize) {
-    ## R-side contract for currently supported separable terms.
     spec <- .sep_parse_spec(spec)
 
     if (!is.null(spec$dims)) {
@@ -696,13 +691,6 @@ parseNumLevels <- function(levels) {
 }
 
 .sep_make_product_spec <- function(bar_expr, scale = NULL) {
-    ## Parse the public product syntax
-    ##
-    ##   separable(us(0 + role) %x% ar1(0 + day) | group, scale = us(0 + role))
-    ##
-    ## into an internal product-design representation.  Margins may contain
-    ## multiple no-intercept columns; the current backend supports registered
-    ## margins that can be represented as marginal SDs and correlations.
     if (!is.call(bar_expr) || !identical(.sep_call_name(bar_expr), "|") ||
         length(bar_expr) != 3L) {
         stop("separable() product syntax must look like ",
