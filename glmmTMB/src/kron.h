@@ -7,6 +7,9 @@
 namespace glmmtmb {
 namespace kron {
 
+template <class Type>
+using margin_type = density::GMRF_t<Type>;
+
 /*
  * Gaussian distribution with covariance
  *
@@ -19,13 +22,13 @@ namespace kron {
 template <class Type>
 class GaussianProduct {
 public:
-  typedef density::GMRF_t<Type> margin_type;
+  typedef glmmtmb::kron::margin_type<Type> margin_distribution;
 
 private:
   vector<int> dim_;
   int size_;
   Type scale_;
-  std::vector<margin_type> margin_;
+  std::vector<margin_distribution> margin_;
   Type base_normalizer_;
 
   static int checked_size(const vector<int>& dim, int n_margin) {
@@ -56,49 +59,35 @@ private:
       Type(log(sqrt(2.0 * M_PI)));
   }
 
-  array<Type> base_precision_times(array<Type> x) {
-    /* GMRF::jacobian acts on the last dimension.  Rotating after each
-       reverse-order application visits every margin and restores the original
-       dimension order after exactly M rotations. */
-    for (int m = dim_.size() - 1; m >= 0; --m) {
-      x = margin_[m].jacobian(x);
-      x = x.rotate(1);
-    }
-    return x;
-  }
-
-  void check_vector_size(int n) const {
-    if (n != size_)
-      error("Kronecker Gaussian vector has the wrong length");
-  }
-
 public:
   GaussianProduct(const vector<int>& dim,
-                  const std::vector<Eigen::SparseMatrix<Type> >& precision,
+                  const std::vector<margin_distribution>& margin,
                   Type scale = Type(1))
-    : dim_(dim), size_(checked_size(dim, precision.size())), scale_(scale) {
-    margin_.reserve(precision.size());
-    for (int m = 0; m < dim_.size(); ++m) {
-      if (precision[m].rows() != dim_(m) ||
-          precision[m].cols() != dim_(m))
-        error("Kronecker Gaussian marginal precision has the wrong size");
-      margin_.push_back(margin_type(precision[m]));
-    }
+    : dim_(dim), size_(checked_size(dim, margin.size())), scale_(scale),
+      margin_(margin) {
     initialize_normalizer();
   }
 
   Type operator()(vector<Type> x) {
-    check_vector_size(x.size());
+    if (x.size() != size_)
+      error("Kronecker Gaussian vector has the wrong length");
     vector<Type> z = x / scale_;
     array<Type> z_array(z, dim_);
-    array<Type> qz = base_precision_times(z_array);
+    array<Type> qz = z_array;
+    /* GMRF::jacobian acts on the last dimension. Rotating after each
+       reverse-order application visits every margin and restores the order. */
+    for (int m = dim_.size() - 1; m >= 0; --m) {
+      qz = margin_[m].jacobian(qz);
+      qz = qz.rotate(1);
+    }
     return base_normalizer_ + Type(size_) * log(scale_) +
       Type(0.5) * (z_array * qz).sum();
   }
 
   /* Transform an iid standard-normal vector by a covariance square root. */
   vector<Type> sqrt_cov_scale(vector<Type> u) {
-    check_vector_size(u.size());
+    if (u.size() != size_)
+      error("Kronecker Gaussian vector has the wrong length");
     array<Type> x(u, dim_);
     for (int m = dim_.size() - 1; m >= 0; --m) {
       const int d = dim_(m);

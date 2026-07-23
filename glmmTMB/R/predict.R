@@ -10,27 +10,12 @@ assertIdenticalModels <- function(data.tmb1, data.tmb0, allow.new.levels=FALSE) 
     ## Defensive check:
     stopifnot(identical(names(t1), names(t0)))
     ## *Never* allowed to differ:
-    testIdentical <- function(checkNm, exact = TRUE) {
+    testIdentical <- function(checkNm) {
       unlist( Map( function(x,y)
-        if (exact) {
-          identical(x[checkNm], y[checkNm])
-        } else {
-          isTRUE(all.equal(x[checkNm], y[checkNm], tolerance = 0,
-                           check.attributes = FALSE))
-        }, t0, t1) )
+        identical(x[checkNm], y[checkNm]), t0, t1) )
     }
-    base_fields <- c("blockNumTheta", "blockCode")
-    kron_fields <- c("kronDims", "kronCodes", "kronMarginColumns")
-    is_kron <- unlist(Map(function(x, y) {
-      any(c(x[["blockCode"]], y[["blockCode"]]) ==
-          .valid_covstruct[["kron"]])
-    }, t0, t1))
-    ok <- testIdentical(base_fields)
-    if (any(is_kron)) {
-      ## R/TMB storage can change integer metadata to numeric on rebuilding.
-      ok[is_kron] <- testIdentical(base_fields, exact = FALSE)[is_kron] &
-        testIdentical(kron_fields, exact = FALSE)[is_kron]
-    }
+    ok <- testIdentical(c("blockNumTheta", "blockCode", "kronDims",
+                          "kronCodes", "kronMarginColumns"))
     if ( ! all(ok) ) {
       msg <- c("Prediction is not possible for terms: ",
                paste(names(t1)[!ok], collapse=", "), "\n",

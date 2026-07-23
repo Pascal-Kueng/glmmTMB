@@ -207,12 +207,12 @@ parseNumLevels <- function(levels) {
         !is.null(value) && NROW(value) == nrow(fr)
     }, logical(1))]
     info <- structure(
-        list(kronDims = as.integer(dims),
-             kronCodes = as.integer(unname(.valid_covstruct[spec$struc])),
+        list(kronDims = as.numeric(dims),
+             kronCodes = as.numeric(unname(.valid_covstruct[spec$struc])),
              kronMarginNames = spec$margin_names,
              kronMarginColumns = margin_columns,
              kronSourceVars = source_vars,
-             ntheta = as.integer(1L + sum(npar))),
+             ntheta = as.numeric(1L + sum(npar))),
         class = "glmmTMB_kron_spec"
     )
     list(product_t = product_t, cnms = cnms, info = info)

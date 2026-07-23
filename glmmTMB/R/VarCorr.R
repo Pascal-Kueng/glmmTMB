@@ -72,11 +72,7 @@ getParList <- function(object) {
     cell_sd <- as.vector(scale * Reduce(kronecker, rev(margin_sd)))
 
     corr <- matrix(NaN, 1L, 1L)
-    make_full <- if (is.null(full_cor)) {
-        isTRUE(term$fullCor == 1L)
-    } else {
-        full_cor
-    }
+    make_full <- isTRUE(full_cor)
     if (make_full) {
         margin_corr <- lapply(rev(margin), function(x) {
             attr(x[[1L]], "correlation")
@@ -243,8 +239,8 @@ mkVC <- function(cor, sd, cnms, sc, bc, useSc) {
 ##' @aliases VarCorr
 ##' @param x a fitted \code{glmmTMB} model
 ##' @param sigma residual standard deviation (usually set automatically from internal information)
-##' @param full_cor optionally reconstruct the full product correlation for
-##'   \code{kron()} terms. The default follows the model's control setting.
+##' @param full_cor reconstruct the full product correlation for \code{kron()}
+##'   terms? The default is \code{FALSE}.
 ##' @param ... extra arguments (for consistency with generic method)
 ##' @importFrom nlme VarCorr
 ## and re-export the generic:

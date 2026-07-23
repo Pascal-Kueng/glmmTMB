@@ -12,8 +12,8 @@
 
 \item{sigma}{residual standard deviation (usually set automatically from internal information)}
 
-\item{full_cor}{optionally reconstruct the full product correlation for
-\code{kron()} terms. The default follows the model's control setting.}
+\item{full_cor}{reconstruct the full product correlation for \code{kron()}
+terms? The default is \code{FALSE}.}
 
 \item{...}{extra arguments (for consistency with generic method)}
 }

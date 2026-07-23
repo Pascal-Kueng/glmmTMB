@@ -313,14 +313,7 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
     nRE <- vapply(list(condList, ziList, dispList),
                   function(x) length(x[["ss"]]), FUN.VALUE = numeric(1))
     nREtot <- sum(nRE)
-    full_cor <- control$full_cor
-    if (is.null(full_cor)) {
-        ## Full product matrices defeat the purpose of kron() for large grids.
-        ## Preserve the historical TRUE default for every ordinary term.
-        full_cor <- unlist(lapply(list(condList, ziList, dispList),
-                                  function(x) x$ss != "kron"),
-                           use.names = FALSE)
-    }
+    full_cor <- control$full_cor %||% TRUE
     if (!length(full_cor) %in% c(1, nREtot)) stop("length of control$full_cor should be 1 or equal to the total number of random effect terms ",
                                                sprintf("%d != 1 or %d", length(full_cor), nREtot))
     full_cor <- rep(full_cor, length.out = nREtot)
@@ -1057,25 +1050,6 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
         aa <- rep(NA, length(blksize))
     }
 
-    kronInfo <- Map(function(struc, a, size) {
-        if (!identical(struc, "kron")) return(NULL)
-        if (!inherits(a, "glmmTMB_kron_spec")) {
-            stop("kron() metadata does not match its random-effects block",
-                 call. = FALSE)
-        }
-        nmargin <- length(a$kronDims)
-        if (!nmargin || length(a$kronCodes) != nmargin ||
-            length(a$kronMarginNames) != nmargin ||
-            length(a$kronMarginColumns) != nmargin ||
-            !identical(as.integer(lengths(a$kronMarginColumns)),
-                       as.integer(a$kronDims)) ||
-            prod(a$kronDims) != size) {
-            stop("kron() metadata does not match its random-effects block",
-                 call. = FALSE)
-        }
-        a
-    }, as.list(ss), aa, as.list(blksize))
-
     getRank <- function(cov_name, a) {
         if (cov_name != "rr") return(0) 
         if (is.na(a)) return(2) #default rank is 2 [FIXME: don't hard-code here; specify upstream]
@@ -1084,7 +1058,7 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
 
     blkrank <- mapply(getRank, ss, aa)
     
-    parFun <- function(struc, blksize, blkrank, kron_info) {
+    parFun <- function(struc, blksize, blkrank, a) {
         switch(as.character(struc),
                "diag" = blksize, # (heterogenous) diag
                "us" = blksize * (blksize+1) / 2,
@@ -1102,11 +1076,16 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
                "homcs" = 2,
                "homtoep" = blksize,
                "equalto" = blksize * (blksize+1) / 2, #equalto (same as us)
-               "kron" = kron_info$ntheta,
+               "kron" = {
+                   if (!inherits(a, "glmmTMB_kron_spec")) {
+                       stop("invalid kron() metadata", call. = FALSE)
+                   }
+                   a$ntheta
+               },
                stop(sprintf("undefined number of parameters for covstruct '%s'", struc))
                )
     }
-    blockNumTheta <- mapply(parFun, ss, blksize, blkrank, kronInfo,
+    blockNumTheta <- mapply(parFun, ss, blksize, blkrank, aa,
                             SIMPLIFY=FALSE)
 
     covCode <- .valid_covstruct[ss]
@@ -1141,13 +1120,13 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
             coords <- parseNumLevels(reTrms$cnms[[i]])
             tmp$dist <- as.matrix( dist(coords) )
         } else if(ss[i] == "kron") {
-            tmp$kronDims <- kronInfo[[i]]$kronDims
-            tmp$kronCodes <- kronInfo[[i]]$kronCodes
+            tmp$kronDims <- aa[[i]]$kronDims
+            tmp$kronCodes <- aa[[i]]$kronCodes
             ## R-side labels are retained for prediction and diagnostics;
             ## the likelihood needs only dimensions and covariance codes.
-            tmp$kronMarginNames <- kronInfo[[i]]$kronMarginNames
-            tmp$kronMarginColumns <- kronInfo[[i]]$kronMarginColumns
-            tmp$kronSourceVars <- kronInfo[[i]]$kronSourceVars
+            tmp$kronMarginNames <- aa[[i]]$kronMarginNames
+            tmp$kronMarginColumns <- aa[[i]]$kronMarginColumns
+            tmp$kronSourceVars <- aa[[i]]$kronSourceVars
         }
         ans[[i]] <- tmp
     }
@@ -1620,7 +1599,7 @@ glmmTMB <- function(
 ##' @param start_method (list) Options to initialize the starting values when fitting models with reduced-rank (\code{rr}) covariance structures; \code{jitter.sd} adds variation to the starting values of latent variables when \code{method = "res"}.
 ##' @param rank_check Check whether all parameters in fixed-effects models are identifiable? This test may be slow for models with large numbers of fixed-effect parameters, therefore default value is 'warning'. Alternatives include 'skip' (no check), 'stop' (throw an error), and 'adjust' (drop redundant columns from the fixed-effect model matrix).
 ##' @param conv_check Do basic checks of convergence (check for non-positive definite Hessian and non-zero convergence code from optimizer). Default is 'warning'; 'skip' ignores these tests (not recommended for general use!)
-##' @param full_cor compute full correlation matrices? Can be \code{NULL} (the default: yes for ordinary terms and no for \code{kron()} terms), a length-1 logical vector for all terms, or a logical vector with one value per random-effect term. The \code{kron()} likelihood always remains factorized; use \code{VarCorr(fit, full_cor = TRUE)} to reconstruct its full product lazily.
+##' @param full_cor compute full correlation matrices? can be either a length-1 logical vector (TRUE/FALSE) to include full correlation matrices for all or none of the random-effect terms in the model, or a logical vector with length equal to the number of correlation matrices, to include/exclude correlation matrices individually. Product matrices for \code{kron()} terms are instead requested lazily with \code{VarCorr(fit, full_cor = TRUE)}.
 ##' @param drop_unused_levels drop unused levels in grouping variables?
 ##' @details
 ##' By default, \code{\link{glmmTMB}} uses the nonlinear optimizer
@@ -1672,7 +1651,7 @@ glmmTMBControl <- function(optCtrl=NULL,
                            start_method = list(method = NULL, jitter.sd = 0),
                            rank_check = c("adjust", "warning", "stop", "skip"),
                            conv_check = c("warning", "skip"),
-                           full_cor = NULL,
+                           full_cor = TRUE,
                            drop_unused_levels = TRUE) {
 
     if (is.null(optCtrl) && identical(optimizer,nlminb)) {
