@@ -15,6 +15,7 @@
 #include "init.h"
 #include "distrib.h"
 #include "cordistrib.h"
+#include "kron.h"
 
 // don't need to include omp.h; we get it via TMB.hpp
 
@@ -94,7 +95,8 @@ enum valid_covStruct {
   hetar1_covstruct = 12,
   homcs_covstruct = 13,
   homtoep_covstruct = 14,
-  equalto_covstruct = 15
+  equalto_covstruct = 15,
+  kron_covstruct = 16
 };
 
 // should probably be named just 'predictCode';
@@ -309,6 +311,8 @@ struct per_term_info {
   int fullCor;       // Compute/store full correlation matrix?
   matrix<Type> dist;
   vector<Type> times;// For ar1 case
+  vector<int> kronDims;
+  vector<int> kronCodes;
   // Report output
   matrix<Type> corr;
   vector<Type> sd;
@@ -345,9 +349,202 @@ struct terms_t : vector<per_term_info<Type> > {
 	RObjectTestExpectedType(d, &Rf_isMatrix, "dist");
 	(*this)(i).dist = asMatrix<Type>(d);
       }
+      // Optionally, pass Kronecker margin dimensions and covariance codes:
+      SEXP kd = getListElement(y, "kronDims");
+      if(!Rf_isNull(kd)){
+	RObjectTestExpectedType(kd, &Rf_isNumeric, "kronDims");
+	(*this)(i).kronDims = asVector<int>(kd);
+      }
+      SEXP kc = getListElement(y, "kronCodes");
+      if(!Rf_isNull(kc)){
+	RObjectTestExpectedType(kc, &Rf_isNumeric, "kronCodes");
+	(*this)(i).kronCodes = asVector<int>(kc);
+      }
     }
   }
 };
+
+bool kron_has_relative_sd(int code) {
+  return code == diag_covstruct || code == cs_covstruct ||
+    code == us_covstruct || code == hetar1_covstruct;
+}
+
+long long kron_margin_npar(int code, int d) {
+  if (d < 1)
+    error("Kronecker margin dimensions must be positive");
+  long long n_sd = kron_has_relative_sd(code) ? d - 1 : 0;
+  switch (code) {
+  case homdiag_covstruct:
+  case diag_covstruct:
+    return n_sd;
+  case homcs_covstruct:
+  case cs_covstruct:
+    if (d < 2) error("Kronecker CS margins need at least two levels");
+    return n_sd + 1;
+  case us_covstruct:
+    return n_sd + static_cast<long long>(d) * (d - 1) / 2;
+  case ar1_covstruct:
+  case hetar1_covstruct:
+    if (d < 2) error("Kronecker AR1 margins need at least two levels");
+    return n_sd + 1;
+  default:
+    error("Unsupported Kronecker covariance margin");
+  }
+  return 0;
+}
+
+template <class Type>
+Eigen::SparseMatrix<Type> kron_dense_precision(matrix<Type> covariance) {
+  long long n_entry = static_cast<long long>(covariance.rows()) *
+    covariance.cols();
+  if (n_entry > std::numeric_limits<int>::max())
+    error("Dense Kronecker margin is too large");
+
+  Type logdet;
+  matrix<Type> precision = atomic::matinvpd(covariance, logdet);
+  typedef Eigen::Triplet<Type> triplet_type;
+  std::vector<triplet_type> entries;
+  entries.reserve(static_cast<size_t>(n_entry));
+  for (int i = 0; i < precision.rows(); ++i)
+    for (int j = 0; j < precision.cols(); ++j)
+      entries.push_back(triplet_type(i, j, precision(i, j)));
+
+  Eigen::SparseMatrix<Type> ans(precision.rows(), precision.cols());
+  ans.setFromTriplets(entries.begin(), entries.end());
+  return ans;
+}
+
+template <class Type>
+Eigen::SparseMatrix<Type> kron_margin_precision(
+    int code, int d, const vector<Type>& theta, int& pos) {
+  vector<Type> relative_sd(d);
+  relative_sd.fill(Type(1));
+  if (kron_has_relative_sd(code)) {
+    vector<Type> logsd(d);
+    Type total = Type(0);
+    for (int i = 0; i < d - 1; ++i) {
+      logsd(i) = theta(pos++);
+      total += logsd(i);
+    }
+    logsd(d - 1) = -total;
+    relative_sd = exp(logsd);
+  }
+
+  typedef Eigen::Triplet<Type> triplet_type;
+  std::vector<triplet_type> entries;
+  Eigen::SparseMatrix<Type> precision(d, d);
+  switch (code) {
+  case homdiag_covstruct:
+  case diag_covstruct: {
+    entries.reserve(d);
+    for (int i = 0; i < d; ++i) {
+      Type inv_sd = Type(1) / relative_sd(i);
+      entries.push_back(triplet_type(i, i, inv_sd * inv_sd));
+    }
+    precision.setFromTriplets(entries.begin(), entries.end());
+    return precision;
+  }
+  case ar1_covstruct:
+  case hetar1_covstruct: {
+    Type raw = theta(pos++);
+    Type phi = raw / sqrt(Type(1) + raw * raw);
+    Type denom = Type(1) - phi * phi;
+    entries.reserve(static_cast<size_t>(3) * d - 2);
+    for (int i = 0; i < d; ++i) {
+      Type diagonal = (i == 0 || i == d - 1) ?
+        Type(1) : Type(1) + phi * phi;
+      entries.push_back(triplet_type(
+        i, i, diagonal / (denom * relative_sd(i) * relative_sd(i))));
+    }
+    for (int i = 0; i < d - 1; ++i) {
+      Type off_diagonal = -phi /
+        (denom * relative_sd(i) * relative_sd(i + 1));
+      entries.push_back(triplet_type(i, i + 1, off_diagonal));
+      entries.push_back(triplet_type(i + 1, i, off_diagonal));
+    }
+    precision.setFromTriplets(entries.begin(), entries.end());
+    return precision;
+  }
+  case homcs_covstruct:
+  case cs_covstruct: {
+    matrix<Type> corr(d, d);
+    corr.setIdentity();
+    Type a = Type(1) / Type(d - 1);
+    Type rho = invlogit(theta(pos++)) * (Type(1) + a) - a;
+    for (int i = 0; i < d; ++i)
+      for (int j = 0; j < d; ++j)
+        if (i != j) corr(i, j) = rho;
+    matrix<Type> covariance(d, d);
+    for (int i = 0; i < d; ++i)
+      for (int j = 0; j < d; ++j)
+        covariance(i, j) = relative_sd(i) * corr(i, j) * relative_sd(j);
+    return kron_dense_precision(covariance);
+  }
+  case us_covstruct: {
+    matrix<Type> corr(d, d);
+    corr.setIdentity();
+    int n_corr = static_cast<int>(static_cast<long long>(d) * (d - 1) / 2);
+    if (n_corr > 0) {
+      vector<Type> corr_par = theta.segment(pos, n_corr);
+      pos += n_corr;
+      density::UNSTRUCTURED_CORR_t<Type> nldens(corr_par);
+      corr = nldens.cov();
+    }
+    matrix<Type> covariance(d, d);
+    for (int i = 0; i < d; ++i)
+      for (int j = 0; j < d; ++j)
+        covariance(i, j) = relative_sd(i) * corr(i, j) * relative_sd(j);
+    return kron_dense_precision(covariance);
+  }
+  default:
+    error("Unsupported Kronecker covariance margin");
+  }
+  return precision;
+}
+
+template <class Type>
+struct kron_parameters {
+  Type scale;
+  std::vector<Eigen::SparseMatrix<Type> > precision;
+};
+
+template <class Type>
+kron_parameters<Type> parse_kron_parameters(const vector<Type>& theta,
+					     per_term_info<Type>& term) {
+  int n_margin = term.kronDims.size();
+  if (n_margin == 0 || term.kronCodes.size() != n_margin)
+    error("Kronecker covariance metadata is missing or inconsistent");
+
+  long long block_size = 1;
+  long long expected_theta = 1; // global log-SD
+  for (int m = 0; m < n_margin; ++m) {
+    int d = term.kronDims(m);
+    if (d < 1)
+      error("Kronecker margin dimensions must be positive");
+    block_size *= d;
+    if (block_size > std::numeric_limits<int>::max())
+      error("Kronecker covariance block is too large");
+    expected_theta += kron_margin_npar(term.kronCodes(m), d);
+    if (expected_theta > std::numeric_limits<int>::max())
+      error("Kronecker covariance has too many parameters");
+  }
+  if (block_size != term.blockSize)
+    error("Kronecker dimensions do not match the random-effects block size");
+  if (static_cast<long long>(theta.size()) != expected_theta)
+    error("Kronecker theta layout does not match its margins");
+
+  kron_parameters<Type> out;
+  out.scale = exp(theta(0));
+  out.precision.reserve(n_margin);
+  int pos = 1;
+  for (int m = 0; m < n_margin; ++m) {
+    out.precision.push_back(kron_margin_precision(
+      term.kronCodes(m), term.kronDims(m), theta, pos));
+  }
+  if (pos != theta.size())
+    error("Kronecker theta pointer did not consume all parameters");
+  return out;
+}
 
 
 // compute log-likelihood of b (conditional modes) conditional on theta (var/cov)
@@ -795,6 +992,32 @@ Type termwise_nll(array<Type> &U, vector<Type> theta, per_term_info<Type>& term,
     }
     term.corr = nldens.cov(); // For report
     term.sd = sd;             // For report
+  }
+  else if (term.blockCode == kron_covstruct) {
+    kron_parameters<Type> pars = parse_kron_parameters(theta, term);
+    glmmtmb::kron::GaussianProduct<Type> product(
+      term.kronDims, pars.precision, pars.scale);
+    for (int g = 0; g < term.blockReps; ++g) {
+      ans += product(vector<Type>(U.col(g)));
+      if (do_simulate) {
+        switch (term.simCode) {
+        case fix_simcode:
+          break;
+        case zero_simcode:
+          for (int k = 0; k < U.rows(); ++k) U(k, g) = Type(0);
+          break;
+        case random_simcode:
+          U.col(g) = product.simulate();
+          break;
+        default:
+          error("unknown simcode");
+        }
+      }
+    }
+    DISABLE_AD {
+      term.corr.resize(1, 1);
+      term.corr(0, 0) = NAN;
+    }
   }
   else error("covStruct not implemented!");
   return ans;

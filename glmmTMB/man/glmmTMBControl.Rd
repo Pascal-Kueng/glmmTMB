@@ -17,7 +17,7 @@ glmmTMBControl(
   start_method = list(method = NULL, jitter.sd = 0),
   rank_check = c("adjust", "warning", "stop", "skip"),
   conv_check = c("warning", "skip"),
-  full_cor = TRUE,
+  full_cor = NULL,
   drop_unused_levels = TRUE
 )
 }
@@ -57,7 +57,7 @@ To trace OpenMP settings, use \code{options(glmmTMB_openmp_debug = TRUE)}.}
 
 \item{conv_check}{Do basic checks of convergence (check for non-positive definite Hessian and non-zero convergence code from optimizer). Default is 'warning'; 'skip' ignores these tests (not recommended for general use!)}
 
-\item{full_cor}{compute full correlation matrices? can be either a length-1 logical vector (TRUE/FALSE) to include full correlation matrices for all or none of the random-effect terms in the model, or a logical vector with length equal to the number of correlation matrices, to include/exclude correlation matrices individually}
+\item{full_cor}{compute full correlation matrices? Can be \code{NULL} (the default: yes for ordinary terms and no for \code{kron()} terms), a length-1 logical vector for all terms, or a logical vector with one value per random-effect term. The \code{kron()} likelihood always remains factorized; use \code{VarCorr(fit, full_cor = TRUE)} to reconstruct its full product lazily.}
 
 \item{drop_unused_levels}{drop unused levels in grouping variables?}
 }

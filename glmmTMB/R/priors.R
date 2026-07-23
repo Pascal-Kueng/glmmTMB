@@ -154,6 +154,10 @@ proc_priors <- function(priors, info = NULL) {
                         blocksize <- re_info[[w]]$blockSize
                         blockcodelab <- names(.valid_covstruct)[match(re_info[[w]]$blockCode, .valid_covstruct)]
                         if (blockcodelab == "rr") stop("can't do priors for rr models yet")
+                        if (blockcodelab == "kron") {
+                            stop("use a whole-term or numeric-index prior for kron() terms; ",
+                                 "sd/cor suffixes do not map to their normalized parameter layout")
+                        }
                         nsd <- if (blockcodelab == "homdiag") 1 else blocksize
                         if (suffix == "sd") {
                             ## all suffixes

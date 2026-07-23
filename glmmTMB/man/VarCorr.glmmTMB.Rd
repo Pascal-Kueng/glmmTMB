@@ -5,12 +5,15 @@
 \alias{VarCorr}
 \title{Extract variance and correlation components}
 \usage{
-\method{VarCorr}{glmmTMB}(x, sigma = 1, ...)
+\method{VarCorr}{glmmTMB}(x, sigma = 1, full_cor = NULL, ...)
 }
 \arguments{
 \item{x}{a fitted \code{glmmTMB} model}
 
 \item{sigma}{residual standard deviation (usually set automatically from internal information)}
+
+\item{full_cor}{optionally reconstruct the full product correlation for
+\code{kron()} terms. The default follows the model's control setting.}
 
 \item{...}{extra arguments (for consistency with generic method)}
 }
@@ -24,6 +27,13 @@ while the remaining n(n-1)/2 parameters are the elements of the Cholesky factor
 of the correlation matrix, filled in column-wise order
 (see the \href{http://kaskr.github.io/adcomp/classdensity_1_1UNSTRUCTURED__CORR__t.html}{TMB documentation}
 for further details).
+
+For \code{kron()} terms, the full product correlation is constructed here,
+rather than during likelihood evaluation. These terms are factorized by
+default; use \code{VarCorr(fit, full_cor = TRUE)} to request the full
+matrix. Otherwise the returned covariance is \code{NA}; its \code{"kron"}
+attribute contains the global scale,
+normalized marginal covariance matrices, dimensions, and column labels.
 }
 \examples{
 ## Comparing variance-covariance matrix with manual computation

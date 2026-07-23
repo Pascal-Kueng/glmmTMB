@@ -313,7 +313,14 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
     nRE <- vapply(list(condList, ziList, dispList),
                   function(x) length(x[["ss"]]), FUN.VALUE = numeric(1))
     nREtot <- sum(nRE)
-    full_cor <- control$full_cor %||% TRUE
+    full_cor <- control$full_cor
+    if (is.null(full_cor)) {
+        ## Full product matrices defeat the purpose of kron() for large grids.
+        ## Preserve the historical TRUE default for every ordinary term.
+        full_cor <- unlist(lapply(list(condList, ziList, dispList),
+                                  function(x) x$ss != "kron"),
+                           use.names = FALSE)
+    }
     if (!length(full_cor) %in% c(1, nREtot)) stop("length of control$full_cor should be 1 or equal to the total number of random effect terms ",
                                                sprintf("%d != 1 or %d", length(full_cor), nREtot))
     full_cor <- rep(full_cor, length.out = nREtot)
@@ -570,7 +577,9 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
 getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
                        contrasts, sparse=FALSE, old_smooths = NULL) {
 
-    has_re <- !is.null(findbars_x(formula))
+    ss <- splitForm(formula, specials = c(names(.valid_covstruct), "s"))
+    has_kron <- "kron" %in% ss$reTrmClasses
+    has_re <- any(ss$reTrmClasses != "s")
     has_smooths <- anySpecial(formula, specials = "s")
 
     ## fixed-effects model matrix X -
@@ -703,9 +712,13 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         }
     }
 
-    ## ran-effects model frame (for predvars)
-    ## important to COPY formula (and its environment)?
-    ranform <- formula
+    kron_pos <- which(ss$reTrmClasses == "kron")
+    kron_build <- vector("list", length(ss$reTrmClasses))
+    for (i in kron_pos) {
+        spec <- .kron_parse(ss$reTrmFormulas[[i]],
+                            ss$reTrmAddArgs[[i]])
+        kron_build[[i]] <- .kron_build(spec, fr, environment(formula))
+    }
 
     if (!has_re && !has_smooths) {
         reTrms <- reXterms <- NULL
@@ -716,24 +729,46 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
 
         ## FIXME: check whether predvars are carried along correctly in terms
         if (!ranOK) stop("no random effects allowed in ", type, " term")
-        ## FIXME: could use doublevert_split = FALSE here to preserve
-        ##  || -> diag() behaviour if we wanted (with new reformulas version)
-        RHSForm(ranform) <- subbars(RHSForm(reOnly(formula)))
+        if (has_kron) {
+            term_pos <- which(ss$reTrmClasses != "s")
+            bars <- ss$reTrmFormulas[term_pos]
+            kron_local <- which(ss$reTrmClasses[term_pos] == "kron")
+            for (j in kron_local) bars[[j]][[2L]] <- 1
+        } else {
+            ## FIXME: could use doublevert_split = FALSE here to preserve
+            ##  || -> diag() behaviour if we wanted
+            ranform <- formula
+            RHSForm(ranform) <- subbars(RHSForm(reOnly(formula)))
+        }
 
         if (has_re) {
-            mf$formula <- ranform
-            ## no_specials so that mkReTrms can handle it
-            reTrms <- mkReTrms(no_specials(
-                findbars_x(formula)),
+            if (!has_kron) {
+                mf$formula <- ranform
+                bars <- no_specials(findbars_x(formula))
+            }
+            reTrms <- mkReTrms(bars,
                 fr, reorder.terms=FALSE, calc.lambdat=FALSE, sparse = TRUE)
+            if (has_kron) {
+                for (j in kron_local) {
+                    i <- term_pos[[j]]
+                    built <- kron_build[[i]]
+                    reTrms$Ztlist[[j]] <-
+                        Matrix::KhatriRao(reTrms$Ztlist[[j]],
+                                         built$product_t)
+                    reTrms$cnms[[j]] <- built$cnms
+                    names(reTrms$Ztlist)[j] <-
+                        deparse1(ss$reTrmFormulas[[i]], collapse = "")
+                }
+                reTrms$Zt <- do.call(rbind, reTrms$Ztlist)
+                reTrms$Gp <- cumsum(c(
+                    0L, vapply(reTrms$Ztlist, nrow, integer(1))
+                ))
+            }
         } else {
             ## dummy elements
             reTrms <- list(Ztlist = list(), flist = list(), cnms = list(),
                            theta = list())
         }
-
-        ## formula <- Reaction ~ s(Days) + (1|Subject)
-        ss <- splitForm(formula, specials = c(names(.valid_covstruct), "s"))
 
         ## contains: c("Zt", "theta", "Lind", "Gp", "lower", "Lambdat", "flist", "cnms", "Ztlist", "nl")
         ## we only need "Zt", "flist", "Gp", "cnms", "Ztlist" (I think)
@@ -814,7 +849,8 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         ## FIXME: make sure that eval() happens in the right environment/
         ##    document potential issues
         ## Changed from getting rank to extracting additional argument for propto
-        get_arg <- function(v) {
+        get_arg <- function(v, cls, i) {
+          if (identical(cls, "kron")) return(kron_build[[i]]$info)
           if (length(v) == 1) return(NA_real_)
           payload <- v[[2]]
           ## rabbit-hole alert. Try to evaluate payload first in model frame,
@@ -828,7 +864,8 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
                                  call. = FALSE))
           return(res)
         }
-        aa <- lapply(ss$reTrmAddArgs, get_arg)
+        aa <- Map(get_arg, ss$reTrmAddArgs, ss$reTrmClasses,
+                  seq_along(ss$reTrmClasses))
 
         ## terms for the model matrix in each RE term
         ## this is imperfect: it should really be done in mkReTrms/mkBlist,
@@ -851,10 +888,13 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         ## HACK: should duplicate 'homdiag' definition, keep it as 's' (or call it 'mgcv_smooth")
         ##  so we can recognize it.
         ## Here, we're using the fact that the ...AddArgs stuff is still in an unevaluated form
-        drop_s <- function(f, a) {
-            if (identical(a[[1]], as.symbol('s'))) NA else termsfun(f)
+        drop_s <- function(f, a, cls) {
+            if (identical(a[[1]], as.symbol('s'))) return(NA)
+            if (identical(cls, "kron")) return(NA)
+            termsfun(f)
         }
-        reXterms <- Map(drop_s, ss$reTrmFormulas, ss$reTrmAddArgs)
+        reXterms <- Map(drop_s, ss$reTrmFormulas, ss$reTrmAddArgs,
+                        ss$reTrmClasses)
         
         for (i in seq_along(ss$reTrmAddArgs)) {
           if(ss$reTrmClasses[i] == "rr") {
@@ -1017,6 +1057,25 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
         aa <- rep(NA, length(blksize))
     }
 
+    kronInfo <- Map(function(struc, a, size) {
+        if (!identical(struc, "kron")) return(NULL)
+        if (!inherits(a, "glmmTMB_kron_spec")) {
+            stop("kron() metadata does not match its random-effects block",
+                 call. = FALSE)
+        }
+        nmargin <- length(a$kronDims)
+        if (!nmargin || length(a$kronCodes) != nmargin ||
+            length(a$kronMarginNames) != nmargin ||
+            length(a$kronMarginColumns) != nmargin ||
+            !identical(as.integer(lengths(a$kronMarginColumns)),
+                       as.integer(a$kronDims)) ||
+            prod(a$kronDims) != size) {
+            stop("kron() metadata does not match its random-effects block",
+                 call. = FALSE)
+        }
+        a
+    }, as.list(ss), aa, as.list(blksize))
+
     getRank <- function(cov_name, a) {
         if (cov_name != "rr") return(0) 
         if (is.na(a)) return(2) #default rank is 2 [FIXME: don't hard-code here; specify upstream]
@@ -1025,7 +1084,7 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
 
     blkrank <- mapply(getRank, ss, aa)
     
-    parFun <- function(struc, blksize, blkrank) {
+    parFun <- function(struc, blksize, blkrank, kron_info) {
         switch(as.character(struc),
                "diag" = blksize, # (heterogenous) diag
                "us" = blksize * (blksize+1) / 2,
@@ -1043,10 +1102,12 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
                "homcs" = 2,
                "homtoep" = blksize,
                "equalto" = blksize * (blksize+1) / 2, #equalto (same as us)
+               "kron" = kron_info$ntheta,
                stop(sprintf("undefined number of parameters for covstruct '%s'", struc))
                )
     }
-    blockNumTheta <- mapply(parFun, ss, blksize, blkrank, SIMPLIFY=FALSE)
+    blockNumTheta <- mapply(parFun, ss, blksize, blkrank, kronInfo,
+                            SIMPLIFY=FALSE)
 
     covCode <- .valid_covstruct[ss]
 
@@ -1079,6 +1140,14 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
         } else if(ss[i] %in% c("exp", "gau", "mat")){
             coords <- parseNumLevels(reTrms$cnms[[i]])
             tmp$dist <- as.matrix( dist(coords) )
+        } else if(ss[i] == "kron") {
+            tmp$kronDims <- kronInfo[[i]]$kronDims
+            tmp$kronCodes <- kronInfo[[i]]$kronCodes
+            ## R-side labels are retained for prediction and diagnostics;
+            ## the likelihood needs only dimensions and covariance codes.
+            tmp$kronMarginNames <- kronInfo[[i]]$kronMarginNames
+            tmp$kronMarginColumns <- kronInfo[[i]]$kronMarginColumns
+            tmp$kronSourceVars <- kronInfo[[i]]$kronSourceVars
         }
         ans[[i]] <- tmp
     }
@@ -1184,6 +1253,15 @@ binomialType <- function(x) {
 ##' \item \code{homdiag} (diagonal, homogeneous variance)
 ##' \item \code{propto} (* proportional to user-specified variance-covariance matrix)
 ##' \item \code{equalto} (* equal to user-specified variance-covariance matrix)
+##' \item \code{kron} (* Kronecker-product covariance, e.g.
+##' \code{kron(us(0 + member + member:x) \%x\% ar1(0 + time) | group)}).
+##' Margins are random-effects formulas and can include random slopes.
+##' A single global standard deviation is estimated;
+##' heterogeneous marginal standard deviations are normalized to have
+##' geometric mean one. Supported margins are \code{homdiag}, \code{diag},
+##' \code{homcs}, \code{cs}, \code{us}, \code{ar1}, and \code{hetar1}.
+##' Margins are ordered left-to-right; columns of the first margin vary
+##' fastest.
 ##' }
 ##' Structures marked with * are experimental/untested. See \code{vignette("covstruct", package = "glmmTMB")} for more information.
 ##' \item For backward compatibility, the \code{family} argument can also be specified as a list comprising the name of the distribution and the link function (e.g. \code{list(family="binomial", link="logit")}). However, \strong{this alternative is now deprecated}; it produces a warning and will be removed at some point in the future. Furthermore, certain capabilities such as Pearson residuals or predictions on the data scale will only be possible if components such as \code{variance} and \code{linkfun} are present, see \code{\link{family}}.
@@ -1371,13 +1449,30 @@ glmmTMB <- function(
     ## used in any of the terms
     ## combine all formulas
     formList <- list(formula, ziformula, dispformula)
+    kron_info <- .kron_formula_info(formList)
+    has_kron <- kron_info$has_kron
     for (i in seq_along(formList)) {
         f <- formList[[i]] ## abbreviate
         ## substitute "|" by "+"; drop specials
-        f <- noSpecials(sub_specials(f), delete=FALSE, specials = c(names(.valid_covstruct), "s"))
+        if (length(.kron_calls(f))) {
+            ## Replace only kron() itself: an unrelated fixed-effects %x%
+            ## must retain its usual matrix-product meaning.
+            f <- .kron_frame_formula(f)
+        }
+        f <- sub_specials(f)
+        f <- noSpecials(f, delete=FALSE,
+                        specials = c(names(.valid_covstruct), "s"))
         formList[[i]] <- f
     }
     combForm <- do.call(addForm,formList)
+    source_vars <- intersect(kron_info$source_vars, names(data))
+    extra_vars <- setdiff(source_vars, kron_info$frame_vars)
+    if (length(extra_vars)) {
+        labels <- vapply(extra_vars, function(x) {
+            deparse1(as.name(x), backtick = TRUE)
+        }, character(1))
+        combForm <- addForm(combForm, stats::reformulate(labels))
+    }
     environment(combForm) <- environment(formula)
     ## model.frame.default looks for these objects in the environment
     ## of the *formula* (see 'extras', which is anything passed in ...),
@@ -1388,7 +1483,17 @@ glmmTMB <- function(
     }
 
     mf$formula <- combForm
+    ## Marginal factor levels define the corresponding covariance dimensions.
+    ## Keep these levels, but honour the usual setting for all other factors.
+    if (has_kron && control$drop_unused_levels) {
+        mf$drop.unused.levels <- FALSE
+    }
     fr <- eval(mf,envir=environment(formula),enclos=parent.frame())
+    if (has_kron && control$drop_unused_levels) {
+        for (nm in setdiff(names(fr), kron_info$frame_vars)) {
+            if (is.factor(fr[[nm]])) fr[[nm]] <- droplevels(fr[[nm]])
+        }
+    }
 
     ## FIXME: throw an error *or* convert character to factor
     ## convert character vectors to factor (defensive)
@@ -1515,7 +1620,7 @@ glmmTMB <- function(
 ##' @param start_method (list) Options to initialize the starting values when fitting models with reduced-rank (\code{rr}) covariance structures; \code{jitter.sd} adds variation to the starting values of latent variables when \code{method = "res"}.
 ##' @param rank_check Check whether all parameters in fixed-effects models are identifiable? This test may be slow for models with large numbers of fixed-effect parameters, therefore default value is 'warning'. Alternatives include 'skip' (no check), 'stop' (throw an error), and 'adjust' (drop redundant columns from the fixed-effect model matrix).
 ##' @param conv_check Do basic checks of convergence (check for non-positive definite Hessian and non-zero convergence code from optimizer). Default is 'warning'; 'skip' ignores these tests (not recommended for general use!)
-##' @param full_cor compute full correlation matrices? can be either a length-1 logical vector (TRUE/FALSE) to include full correlation matrices for all or none of the random-effect terms in the model, or a logical vector with length equal to the number of correlation matrices, to include/exclude correlation matrices individually
+##' @param full_cor compute full correlation matrices? Can be \code{NULL} (the default: yes for ordinary terms and no for \code{kron()} terms), a length-1 logical vector for all terms, or a logical vector with one value per random-effect term. The \code{kron()} likelihood always remains factorized; use \code{VarCorr(fit, full_cor = TRUE)} to reconstruct its full product lazily.
 ##' @param drop_unused_levels drop unused levels in grouping variables?
 ##' @details
 ##' By default, \code{\link{glmmTMB}} uses the nonlinear optimizer
@@ -1567,7 +1672,7 @@ glmmTMBControl <- function(optCtrl=NULL,
                            start_method = list(method = NULL, jitter.sd = 0),
                            rank_check = c("adjust", "warning", "stop", "skip"),
                            conv_check = c("warning", "skip"),
-                           full_cor = TRUE,
+                           full_cor = NULL,
                            drop_unused_levels = TRUE) {
 
     if (is.null(optCtrl) && identical(optimizer,nlminb)) {

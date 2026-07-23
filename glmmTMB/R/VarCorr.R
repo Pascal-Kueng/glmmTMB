@@ -12,6 +12,85 @@ getParList <- function(object) {
     object$obj$env$parList(object$fit$par, object$fit$parfull)
 }
 
+## Reconstruct a Kronecker term only when covariance output is requested.
+## The likelihood and simulation paths operate on the marginal factors in C++
+## and never materialize the full product matrix.
+.kron_vc_components <- function(theta, term, full_cor = NULL) {
+    dims <- term$kronDims
+    codes <- term$kronCodes
+    stopifnot(length(dims) > 0L, length(dims) == length(codes),
+              length(theta) == term$blockNumTheta)
+
+    pos <- 2L
+    take <- function(n) {
+        if (n == 0L) return(numeric())
+        ans <- theta[pos + seq_len(n) - 1L]
+        pos <<- pos + n
+        ans
+    }
+    hetero <- c("diag", "cs", "us", "hetar1")
+    columns <- term$kronMarginColumns
+
+    margin <- Map(function(d, code, cn) {
+        struc <- names(.valid_covstruct)[match(code, .valid_covstruct)]
+        if (is.na(struc)) stop("unknown kron() margin code", call. = FALSE)
+
+        logsd <- numeric(d)
+        if (struc %in% hetero && d > 1L) {
+            free <- take(d - 1L)
+            logsd <- c(free, -sum(free))
+        }
+        sd <- exp(logsd)
+        corr <- diag(d)
+        if (struc %in% c("homcs", "cs")) {
+            a <- 1 / (d - 1)
+            rho <- plogis(take(1L)) * (1 + a) - a
+            corr[] <- rho
+            diag(corr) <- 1
+        } else if (struc == "us" && d > 1L) {
+            corr <- get_cor(take(d * (d - 1L) / 2L), "mat")
+        } else if (struc %in% c("ar1", "hetar1")) {
+            raw <- take(1L)
+            phi <- raw / sqrt(1 + raw^2)
+            corr <- outer(seq_len(d), seq_len(d),
+                          function(i, j) phi^abs(i - j))
+        } else if (!struc %in% c("homdiag", "diag")) {
+            stop("unsupported kron() margin: ", struc, call. = FALSE)
+        }
+        names(sd) <- cn
+        dimnames(corr) <- list(cn, cn)
+        list(structure(outer(sd, sd) * corr, stddev = sd,
+                       correlation = corr),
+             struc = struc)
+    }, as.list(dims), as.list(codes), columns)
+    if (pos != length(theta) + 1L) {
+        stop("kron() theta layout is inconsistent", call. = FALSE)
+    }
+
+    scale <- exp(theta[[1L]])
+    margin_sd <- lapply(margin, function(x) attr(x[[1L]], "stddev"))
+    cell_sd <- as.vector(scale * Reduce(kronecker, rev(margin_sd)))
+
+    corr <- matrix(NaN, 1L, 1L)
+    make_full <- if (is.null(full_cor)) {
+        isTRUE(term$fullCor == 1L)
+    } else {
+        full_cor
+    }
+    if (make_full) {
+        margin_corr <- lapply(rev(margin), function(x) {
+            attr(x[[1L]], "correlation")
+        })
+        corr <- Reduce(kronecker, margin_corr)
+    }
+    margin_struc <- vapply(margin, `[[`, character(1), "struc")
+    margin_names <- paste0(term$kronMarginNames, " [", margin_struc, "]")
+    list(sd = cell_sd, corr = corr, scale = scale,
+         margins = setNames(lapply(margin, `[[`, 1L), margin_names),
+         dims = dims, margin_names = term$kronMarginNames,
+         margin_columns = columns)
+}
+
 
 ##' Extract residual standard deviation or dispersion parameter
 ##'
@@ -164,6 +243,8 @@ mkVC <- function(cor, sd, cnms, sc, bc, useSc) {
 ##' @aliases VarCorr
 ##' @param x a fitted \code{glmmTMB} model
 ##' @param sigma residual standard deviation (usually set automatically from internal information)
+##' @param full_cor optionally reconstruct the full product correlation for
+##'   \code{kron()} terms. The default follows the model's control setting.
 ##' @param ... extra arguments (for consistency with generic method)
 ##' @importFrom nlme VarCorr
 ## and re-export the generic:
@@ -189,15 +270,28 @@ mkVC <- function(cor, sd, cnms, sc, bc, useSc) {
 ##' of the correlation matrix, filled in column-wise order
 ##' (see the \href{http://kaskr.github.io/adcomp/classdensity_1_1UNSTRUCTURED__CORR__t.html}{TMB documentation}
 ##' for further details).
+##'
+##' For \code{kron()} terms, the full product correlation is constructed here,
+##' rather than during likelihood evaluation. These terms are factorized by
+##' default; use \code{VarCorr(fit, full_cor = TRUE)} to request the full
+##' matrix. Otherwise the returned covariance is \code{NA}; its \code{"kron"}
+##' attribute contains the global scale,
+##' normalized marginal covariance matrices, dimensions, and column labels.
 ##' @keywords internal
-VarCorr.glmmTMB <- function(x, sigma = 1, ... )
+VarCorr.glmmTMB <- function(x, sigma = 1, full_cor = NULL, ... )
 {
     ## FIXME:: add type=c("varcov","sdcorr","logs" ?)
     ## FIXME:: do we need 'sigma' any more (now that nlme generic
     ##         doesn't have it?)
     check_dots(..., .action = "warning")
     stopifnot(is.numeric(sigma), length(sigma) == 1)
+    if (!is.null(full_cor) &&
+        (!is.logical(full_cor) || length(full_cor) != 1L ||
+         is.na(full_cor))) {
+        stop("full_cor must be NULL or one TRUE/FALSE value", call. = FALSE)
+    }
     xrep <- x$obj$env$report(x$fit$parfull)
+    par_list <- NULL
     reT <- x$modelInfo$reTrms
     reS <- x$modelInfo$reStruc
     familyStr <- family(x)$family
@@ -217,14 +311,37 @@ VarCorr.glmmTMB <- function(x, sigma = 1, ... )
         ## lapply() rather than [vs]apply, don't want to lose names
         bcvec <- lapply(restruc, function(x) x[["blockCode"]])
         if(length(cn <- reT[[comp_nms2[i]]]$cnms)) {
-            vc <- mkVC(cor = xrep[[paste0("corr", comp_nms[i])]],
-                       sd  = xrep[[paste0("sd", comp_nms[i])]],
+            corr_nm <- paste0("corr", comp_nms[i])
+            sd_nm <- paste0("sd", comp_nms[i])
+            theta_nm <- paste0("theta", comp_nms[i])
+            kron_info <- vector("list", length(restruc))
+            theta_pos <- 1L
+            for (j in seq_along(restruc)) {
+                nt <- restruc[[j]]$blockNumTheta
+                if (identical(unname(restruc[[j]]$blockCode),
+                              unname(.valid_covstruct[["kron"]]))) {
+                    if (is.null(par_list)) par_list <- getParList(x)
+                    ind <- theta_pos + seq_len(nt) - 1L
+                    kron_info[[j]] <- .kron_vc_components(
+                        par_list[[theta_nm]][ind], restruc[[j]], full_cor)
+                    xrep[[corr_nm]][[j]] <- kron_info[[j]]$corr
+                    xrep[[sd_nm]][[j]] <- kron_info[[j]]$sd
+                }
+                theta_pos <- theta_pos + nt
+            }
+            vc <- mkVC(cor = xrep[[corr_nm]],
+                       sd  = xrep[[sd_nm]],
                        cnms = cn,
                        sc = sigma,
                        bc = bcvec,
                        useSc = useSc)
             for (j in seq_along(vc)) {
                 attr(vc[[j]],"blockCode") <- bcvec[[j]]
+                if (!is.null(kron_info[[j]])) {
+                    attr(vc[[j]], "kron") <- kron_info[[j]][
+                        c("scale", "margins", "dims", "margin_names",
+                          "margin_columns")]
+                }
                 class(vc[[j]]) <- c(paste0("vcmat_", names(bcvec[[j]])), class(vc[[j]]))
             }
             corr_list[[comp_nms2[[i]]]] <- vc

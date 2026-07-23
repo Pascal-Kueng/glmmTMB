@@ -10,15 +10,31 @@ assertIdenticalModels <- function(data.tmb1, data.tmb0, allow.new.levels=FALSE) 
     ## Defensive check:
     stopifnot(identical(names(t1), names(t0)))
     ## *Never* allowed to differ:
-    testIdentical <- function(checkNm) {
+    testIdentical <- function(checkNm, exact = TRUE) {
       unlist( Map( function(x,y)
-        identical(x[checkNm], y[checkNm]), t0, t1) )
+        if (exact) {
+          identical(x[checkNm], y[checkNm])
+        } else {
+          isTRUE(all.equal(x[checkNm], y[checkNm], tolerance = 0,
+                           check.attributes = FALSE))
+        }, t0, t1) )
     }
-    ok <- testIdentical( c("blockNumTheta", "blockCode") )
+    base_fields <- c("blockNumTheta", "blockCode")
+    kron_fields <- c("kronDims", "kronCodes", "kronMarginColumns")
+    is_kron <- unlist(Map(function(x, y) {
+      any(c(x[["blockCode"]], y[["blockCode"]]) ==
+          .valid_covstruct[["kron"]])
+    }, t0, t1))
+    ok <- testIdentical(base_fields)
+    if (any(is_kron)) {
+      ## R/TMB storage can change integer metadata to numeric on rebuilding.
+      ok[is_kron] <- testIdentical(base_fields, exact = FALSE)[is_kron] &
+        testIdentical(kron_fields, exact = FALSE)[is_kron]
+    }
     if ( ! all(ok) ) {
       msg <- c("Prediction is not possible for terms: ",
                paste(names(t1)[!ok], collapse=", "), "\n",
-               "Probably some factor levels in 'newdata' require fitting a new model.")
+               "Probably some new levels in 'newdata' require fitting a new model.")
       stop(msg)
     }
     ## Sometimes allowed to differ:
@@ -291,6 +307,20 @@ predict.glmmTMB <- function(object,
     ##  use delete.response() -- handles dropping response from predvars
     ## Would still need careful testing etc..
 
+    forms <- object$modelInfo$allForm[
+      c("formula", "ziformula", "dispformula")]
+    bars <- unlist(lapply(forms, findbars), recursive = FALSE)
+    varying_vars <- unique(unlist(lapply(
+      bars, function(x) all.vars(x[[2L]])), use.names = FALSE))
+    kron_info <- .kron_formula_info(forms)
+    re_terms <- unlist(object$modelInfo$reStruc, recursive = FALSE,
+                       use.names = FALSE)
+    kron_data_vars <- unique(unlist(lapply(
+      re_terms, `[[`, "kronSourceVars"), use.names = FALSE))
+    random_vars <- setdiff(
+      unique(unlist(lapply(bars, all.vars), use.names = FALSE)),
+      setdiff(kron_info$margin_vars, kron_data_vars)
+    )
     
     if (is.null(newdata)) {
       mf$data <- mc$data ## restore original data
@@ -301,8 +331,7 @@ predict.glmmTMB <- function(object,
         ## add missing components in newdata
         ## (placeholder only to avoid error in model frame construction:
         ##  value shouldn't matter since all b values will be fixed to NA anyway ...)
-        req_vars <- all.vars(RHSForm(formula(object, reOnly = TRUE)))
-        for (fnew in setdiff(req_vars, names(newdata))) {
+        for (fnew in setdiff(random_vars, names(newdata))) {
           newdata[[fnew]] <- NA
         }
       }
@@ -341,10 +370,10 @@ predict.glmmTMB <- function(object,
     ##    https://github.com/glmmTMB/glmmTMB/issues/439
 
     fnms <- names(augFr)[facs]
-    form <- formula(object)
-    ## vars on LEFT side of (f|g) only
-    re_vars <- unlist(lapply(findbars(form), function(x) all.vars(x[2][[1]])))
-    nongrpvars <- union(all.vars(nobars(form)), re_vars)
+    fixed_vars <- unique(unlist(lapply(forms, function(x) {
+      all.vars(nobars(x))
+    }), use.names = FALSE))
+    nongrpvars <- union(fixed_vars, varying_vars)
     ## want to exclude factors that appear *only* in grpvars
     ## (== include vars from fixed effects and varying terms)
     fnms <- fnms[fnms %in% nongrpvars]
@@ -357,11 +386,17 @@ predict.glmmTMB <- function(object,
         ## if rownames(c2) is NULL this won't do what we want ...
         if (!is.null(c2)) {
           row_ind <- rownames(c2) %||% seq_len(nrow(c2))
-          c1_sub <- c1[row_ind, colnames(c2), drop=FALSE]
+          matched <- all(row_ind %in% rownames(c1)) &&
+            all(colnames(c2) %in% colnames(c1)) &&
+            isTRUE(all.equal(c1[row_ind, colnames(c2), drop = FALSE], c2))
+          default_relevel <- setequal(levels(object$frame[[fnm]]),
+                                      levels(newFr[[fnm]])) &&
+            is.null(attr(object$frame[[fnm]], "contrasts")) &&
+            is.null(attr(newFr[[fnm]], "contrasts"))
           ## maybe too coarse, but as mentioned above, I don't
           ##  even know if such mismatches really matter ...
-          if(!(isTRUE(all.equal(c1_sub,c2)) ||
-                 isTRUE(all.equal(c1, c2)))) {
+          if (!(matched || default_relevel ||
+                isTRUE(all.equal(c1, c2)))) {
             warning("contrasts mismatch between original and prediction frame in variable ",
                     sQuote(fnm))
           }
