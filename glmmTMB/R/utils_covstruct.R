@@ -95,8 +95,7 @@ parseNumLevels <- function(levels) {
         stop("kron() must contain a product random-effects term",
              call. = FALSE)
     }
-    if (!is.call(add_arg) || !identical(.kron_call_name(add_arg), "kron") ||
-        length(add_arg) != 1L) {
+    if (!identical(add_arg, quote(kron()))) {
         stop("kron() does not accept additional arguments", call. = FALSE)
     }
 
@@ -108,13 +107,11 @@ parseNumLevels <- function(levels) {
 
     struc <- character(length(margins))
     expr <- vector("list", length(margins))
-    margin_names <- character(length(margins))
 
     for (i in seq_along(margins)) {
         margin <- margins[[i]]
-        arg_names <- names(margin)[-1L]
-        has_named_arg <- length(arg_names) > 0L && any(nzchar(arg_names))
-        if (!is.call(margin) || length(margin) != 2L || has_named_arg) {
+        if (!is.call(margin) || length(margin) != 2L ||
+            !is.null(names(margin))) {
             stop("kron() margins must look like us(1 + x) or ",
                  "ar1(0 + time)", call. = FALSE)
         }
@@ -123,8 +120,7 @@ parseNumLevels <- function(levels) {
             stop("unsupported kron() margin: ", struc[[i]], call. = FALSE)
         }
         expr[[i]] <- margin[[2L]]
-        margin_names[[i]] <- deparse1(expr[[i]], collapse = "")
     }
 
-    list(struc = struc, expr = expr, margin_names = margin_names)
+    list(struc = struc, expr = expr)
 }

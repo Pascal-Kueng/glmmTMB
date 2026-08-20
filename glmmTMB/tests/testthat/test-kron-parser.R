@@ -24,14 +24,6 @@ test_that("kron parser preserves the product specification", {
         spec$expr,
         list(quote(0 + member), quote(0 + time), quote(0 + outcome))
     )
-    expect_identical(
-        spec$margin_names,
-        c("0 + member", "0 + time", "0 + outcome")
-    )
-    expect_identical(
-        lengths(spec[c("struc", "expr", "margin_names")]),
-        c(struc = 3L, expr = 3L, margin_names = 3L)
-    )
 })
 
 test_that("kron parser rejects malformed product terms", {
