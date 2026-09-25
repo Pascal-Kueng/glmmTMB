@@ -335,6 +335,18 @@ test_that("contrasts carried over", {
     expect_equal(p3, p4[1:22])
 })
 
+test_that("reordered factor levels in newdata", {
+    m <- glmmTMB(Sepal.Length ~ Species, iris)
+    nd <- transform(iris, Species = factor(Species, levels = rev(levels(Species))))
+    expect_no_warning(p <- predict(m, newdata = nd))
+    expect_equal(p, predict(m, newdata = iris))
+    ## fitted with non-default contrasts, newdata without
+    iris2 <- iris
+    contrasts(iris2$Species) <- contr.sum
+    m2 <- glmmTMB(Sepal.Length ~ Species, iris2)
+    expect_equal(predict(m2, newdata = iris), predict(m2, newdata = iris2))
+})
+
 test_that("dispersion", {
     mod5 <- glmmTMB(Sepal.Length ~ Species, disp=~ Species, iris)
     expect_equal(length(unique(predict(mod5, type="disp"))), length(unique(iris$Species)))
@@ -511,6 +523,14 @@ test_that("pop-level prediction with missing grouping vars (GH #923)",
     )
     expect_equal(predict(fmnasty, re.form = NA),
                  predict(fmnasty, newdata = data.frame(matrix(ncol=0, nrow = nrow(sleepstudy))), re.form = NA))
+})
+
+test_that("pop-level prediction with missing zi grouping var", {
+    m <- glmmTMB(count ~ mined, ziformula = ~ (1 | site),
+                 family = poisson, data = Salamanders)
+    nd <- data.frame(mined = c("yes", "no"))
+    expect_equal(predict(m, newdata = nd, re.form = NA),
+                 predict(m, newdata = transform(nd, site = NA), re.form = NA))
 })
 
     
@@ -692,3 +712,17 @@ test_that("betabinomial Pearson resids", {
   expect_equal(coef(lm(y~x, res))[["x"]], 0, tolerance = 2e-2)
 })
 
+test_that("predict with newdata uses the backend of the fit", {
+    local_useRTMB(FALSE)
+    m <- glmmTMB(Reaction ~ Days, sleepstudy,
+                 control = glmmTMBControl(use_rtmb = TRUE))
+    used_rtmb <- NA
+    MakeADFun_orig <- glmmTMB:::MakeADFun
+    local_mocked_bindings(MakeADFun = function(...) {
+        used_rtmb <<- useRTMB()
+        MakeADFun_orig(...)
+    }, .package = "glmmTMB")
+    predict(m, newdata = sleepstudy[1:3, ])
+    expect_true(used_rtmb)
+    expect_false(useRTMB())
+})

@@ -147,6 +147,14 @@
       fixed-effect column); the aliased coefficient now gets \code{NA} ddf,
       like its \code{NA} estimate and standard error, rather than erroring
       (GH #1326, @qdread)
+      \item \code{predict} with \code{newdata} no longer fails with
+      "subscript out of bounds" when a factor in \code{newdata} has its
+      levels in a different order than in the original data, or when the
+      model was fitted with non-default contrasts and \code{newdata} has
+      default contrasts
+      \item \code{predict(., re.form = NA)} no longer requires
+      \code{newdata} to contain the variables of random-effect terms in
+      \code{ziformula} or \code{dispformula}
     }
   } % bug fixes
   \subsection{USER-VISIBLE CHANGES}{

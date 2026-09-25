@@ -166,8 +166,11 @@ predict.glmmTMB <- function(object,
     if (!se.fit) message("se.fit set to TRUE because cov.fit = TRUE")
     se.fit <- TRUE
   }
-  rtmb_fit <- !is.null(environment(object$obj$fn)$rtmb_data_env)
-  
+  ## rebuild the objective with the backend used for fitting
+  old_use_rtmb <- useRTMB()
+  useRTMB(!is.null(environment(object$obj$fn)$rtmb_data_env))
+  on.exit(useRTMB(old_use_rtmb), add = TRUE)
+
   if(is.null(aggregate)) {
     aggregate <- factor()
   }
@@ -330,7 +333,8 @@ predict.glmmTMB <- function(object,
         ## add missing components in newdata
         ## (placeholder only to avoid error in model frame construction:
         ##  value shouldn't matter since all b values will be fixed to NA anyway ...)
-        req_vars <- all.vars(RHSForm(formula(object, reOnly = TRUE)))
+        forms <- object$modelInfo$allForm[c("formula", "ziformula", "dispformula")]
+        req_vars <- unlist(lapply(unlist(lapply(forms, findbars)), all.vars))
         for (fnew in setdiff(req_vars, names(newdata))) {
           newdata[[fnew]] <- NA
         }
@@ -384,9 +388,15 @@ predict.glmmTMB <- function(object,
       if (!allow.new.levels) {
         ## subset contrasts to those relevant to newFr
         ## if rownames(c2) is NULL this won't do what we want ...
-        if (!is.null(c2)) {
+        ## skip default contrasts in newFr (e.g. reordered levels):
+        ##  augFr uses c1 anyway
+        if (!is.null(c2) && !is.null(attr(newFr[[fnm]], "contrasts"))) {
           row_ind <- rownames(c2) %||% seq_len(nrow(c2))
-          c1_sub <- c1[row_ind, colnames(c2), drop=FALSE]
+          ## NULL if c2 has levels or columns that c1 lacks
+          c1_sub <- if (all(row_ind %in% rownames(c1)) &&
+                        all(colnames(c2) %in% colnames(c1))) {
+            c1[row_ind, colnames(c2), drop=FALSE]
+          }
           ## maybe too coarse, but as mentioned above, I don't
           ##  even know if such mismatches really matter ...
           if(!(isTRUE(all.equal(c1_sub,c2)) ||
