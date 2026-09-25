@@ -1240,7 +1240,18 @@ confint.glmmTMB <- function (object, parm = NULL, level = 0.95,
                 names(cc) <- nn
                 ss <- c(ss,cc)
             }
-            return(ss)
+            ## keep only the SDs and correlations that match theta parameters
+            ## (the lag-k correlation cor[k+1, 1] is the k-th correlation)
+            n <- length(attr(x, "stddev"))
+            keep <- switch(names(attr(x, "blockCode")),
+                           ar1 = , homcs = c(1, 1),
+                           cs = , hetar1 = c(n, 1),
+                           homdiag = c(1, 0),
+                           diag = c(n, 0),
+                           toep = c(n, n - 1),
+                           homtoep = c(1, n - 1),
+                           c(n, length(ss) - n))
+            return(c(head(ss, keep[1]), head(ss[-seq_len(n)], keep[2])))
         }
         reduce <- function(VC) {
             L <- lapply(VC[[component]], cfun)

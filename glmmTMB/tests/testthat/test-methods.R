@@ -543,6 +543,28 @@ test_that("confint with theta_ for models with RE in dispformula", {
                  dispformula = ~1 + (1|cyl), data = mtcars, family = gaussian)
     expect_equal(rownames(confint(m, parm = "theta_")), "disp.Std.Dev.(Intercept)|cyl")
 })
+
+test_that("confint with theta_ for structured covariance terms", {
+    set.seed(101)
+    dd <- expand.grid(time = factor(1:3), g = factor(1:20), rep = 1:2)
+    dd$h <- factor(rep(1:5, length.out = nrow(dd)))
+    u <- matrix(rnorm(60), 20) %*% chol(0.5^abs(outer(1:3, 1:3, "-")))
+    dd$y <- u[cbind(dd$g, dd$time)] + rnorm(5)[dd$h] + rnorm(nrow(dd), sd = 0.5)
+    sd <- paste0("Std.Dev.time", 1:3, "|g")
+    cor <- paste0("Cor.time", 2:3, ".time1|g")
+    ## one row per theta parameter, followed by the (1|h) term
+    expected <- list(ar1 = c(sd[1], cor[1]),
+                     hetar1 = c(sd, cor[1]),
+                     homcs = c(sd[1], cor[1]),
+                     homdiag = sd[1],
+                     cs = c(sd, cor[1]),
+                     toep = c(sd, cor))
+    for (s in names(expected)) {
+        fit <- glmmTMB(as.formula(sprintf("y ~ %s(0 + time | g) + (1 | h)", s)), dd)
+        expect_equal(rownames(confint(fit, parm = "theta_")),
+                     c(expected[[s]], "Std.Dev.(Intercept)|h"))
+    }
+})
          
 simfun <- function(formula, family, data, beta=c(0,1)) {
     ss <- list(beta=beta)
