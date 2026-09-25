@@ -4,6 +4,21 @@
 \title{glmmTMB News}
 \encoding{UTF-8}
 
+\section{CHANGES IN VERSION 1.1.15.9000}{
+  \subsection{BUG FIXES}{
+    \itemize{
+      \item Wald \code{confint(., parm = "theta_")} now returns the
+      correct rows for structured covariance terms (\code{ar1},
+      \code{hetar1}, \code{cs}, \code{homcs}, \code{homdiag},
+      \code{toep}, \code{homtoep}); previously it could return the wrong
+      standard deviations or correlations, and shifted the rows of later
+      random-effect terms. \code{confint()} now shows one row per
+      covariance parameter for these terms, e.g. one SD and the lag-1
+      correlation for \code{ar1} (Pascal Küng)
+    } % itemize
+  } % bug fixes
+} % 1.1.15.9000
+
 \section{CHANGES IN VERSION 1.1.15}{
   \subsection{NEW FEATURES}{
     \itemize{
