@@ -67,6 +67,19 @@ test_that("up2date for models with mapped components", {
     expect_equal(vcov(m1_map), vcov(m1_mapu))
 })
 
+test_that("up2date keeps the backend of the fit", {
+    local_useRTMB(FALSE)
+    m <- glmmTMB(count ~ mined + (1|site),
+                 family=poisson, data=Salamanders,
+                 control = glmmTMBControl(use_rtmb = TRUE))
+    fn <- tempfile()
+    saveRDS(m, fn)
+    mu <- up2date(readRDS(fn))
+    expect_false(is.null(mu$obj$env$rtmb_data_env))
+    expect_false(useRTMB())
+    expect_equal(vcov(m), vcov(mu))
+})
+
 test_that("up2date doesn't mangle parameter order", {
   m <- readRDS(system.file("test_data", "old_fit.rds", package = "glmmTMB"))
   expect_identical(m$modelInfo$packageVersion, package_version("1.1.9.9000"))

@@ -503,13 +503,17 @@ up2date <- function(oldfit, update_gauss_disp = FALSE) {
       }
     }
 
-    oldfit$obj <- with(ee,
-                            MakeADFun(data,
-                                      parameters,
-                                      map = map,
-                                      random = random,
-                                      silent = silent,
-                                      DLL = "glmmTMB"))
+    ## rebuild with the backend used for fitting
+    ## (not with(ee, ...), which would find TMB::MakeADFun)
+    old_use_rtmb <- useRTMB()
+    useRTMB(!is.null(ee$rtmb_data_env))
+    on.exit(useRTMB(old_use_rtmb), add = TRUE)
+    oldfit$obj <- MakeADFun(ee$data,
+                            ee$parameters,
+                            map = ee$map,
+                            random = ee$random,
+                            silent = ee$silent,
+                            DLL = "glmmTMB")
 
     ## replace carefully (ordering problem)
     replace_vals <- function(x, y) {
