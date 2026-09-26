@@ -4,6 +4,18 @@
 \title{glmmTMB News}
 \encoding{UTF-8}
 
+\section{CHANGES IN VERSION 1.1.15.9000}{
+  \subsection{USER-VISIBLE CHANGES}{
+    \itemize{
+      \item \code{glmmTMB} now warns when levels of an \code{ar1()} or
+      \code{hetar1()} time factor that no observation uses are dropped
+      (the default, \code{glmmTMBControl(drop_unused_levels = TRUE)}),
+      since the AR(1) lags then count only the remaining levels
+      (GH #1278, Pascal Küng)
+    } % itemize
+  } % user-visible changes
+} % 1.1.15.9000
+
 \section{CHANGES IN VERSION 1.1.15}{
   \subsection{NEW FEATURES}{
     \itemize{

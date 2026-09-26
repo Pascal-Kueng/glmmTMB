@@ -112,6 +112,15 @@ test_that("ar1 and hetar1 require factor time", {
               "glmmTMB")
 })
 
+test_that("warn when unobserved ar1 time levels are dropped (GH #1278)", {
+    dd <- subset(sleepstudy, Days != 3)
+    dd$fday <- factor(dd$Days, levels = 0:9)
+    expect_warning(glmmTMB(Reaction ~ ar1(fday + 0 | Subject), dd, doFit = FALSE),
+                   "unobserved levels")
+    expect_no_warning(glmmTMB(Reaction ~ ar1(fday + 0 | Subject), dd, doFit = FALSE,
+                              control = glmmTMBControl(drop_unused_levels = FALSE)))
+})
+
 ## FIXME: simpler to check formatVC() directly?
 get_vcout <- function(x, g="\\bSubject\\b") {
     cc <- capture.output(print(VarCorr(x)))

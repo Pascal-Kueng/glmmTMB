@@ -1250,7 +1250,7 @@ binomialType <- function(x) {
 ##' \item \code{propto} (* proportional to user-specified variance-covariance matrix)
 ##' \item \code{equalto} (* equal to user-specified variance-covariance matrix)
 ##' }
-##' Structures marked with * are experimental/untested. See \code{vignette("covstruct", package = "glmmTMB")} for more information.
+##' Structures marked with * are experimental/untested. See \code{vignette("covstruct", package = "glmmTMB")} for more information. For \code{ar1} and \code{hetar1}, the levels of the time factor set the lags, and by default levels that no observation uses are dropped (with a warning). To keep time points that are never observed, use \code{control = glmmTMBControl(drop_unused_levels = FALSE)} (this applies to all factors), or use \code{ou} with \code{\link{numFactor}} times.
 ##' \item For backward compatibility, the \code{family} argument can also be specified as a list comprising the name of the distribution and the link function (e.g. \code{list(family="binomial", link="logit")}). However, \strong{this alternative is now deprecated}; it produces a warning and will be removed at some point in the future. Furthermore, certain capabilities such as Pearson residuals or predictions on the data scale will only be possible if components such as \code{variance} and \code{linkfun} are present, see \code{\link{family}}.
 ##' \item Smooths taken from the \code{mgcv} package can be included in \code{glmmTMB} formulas using \code{s}; these terms will appear as additional components in both the fixed and the random-effects terms. This functionality is \emph{experimental} for now. We recommend using \code{REML=TRUE}. See \code{\link[mgcv]{s}} for details of specifying smooths (and \code{\link[mgcv]{smooth2random}} and the appendix of Wood (2004) for technical details).
 ##' }
@@ -1562,6 +1562,10 @@ glmmTMB <- function(
                    sparseX=sparseX,
                    control=control,
                    priors = priors)
+
+    for (reList in TMBStruc[c("condList", "ziList", "dispList")]) {
+        checkTimeLevels(reList, fr, data, environment(formula))
+    }
 
     ## Allow for adaptive control parameters
     TMBStruc$control <- lapply(control, eval, envir = TMBStruc)
@@ -1901,6 +1905,27 @@ checkProptoNames <- function(aa, cnms, reXtrm){
           }
           stop( "column or row names of the propto matrix do not match the terms. Expecting names:", sQuote(cnms), call. = FALSE)
       }
+  }
+}
+
+##' Warns if unobserved levels of an ar1/hetar1 time factor were dropped
+##' (AR(1) lags count by factor level)
+##' @param reList output of \code{getXReTrms}
+##' @param fr model frame
+##' @param data data used to build the model frame
+##' @param env environment of the model formula
+##' @noRd
+checkTimeLevels <- function(reList, fr, data, env) {
+  for (tt in reList$reXterms[reList$ss %in% c("ar1", "hetar1")]) {
+    for (v in as.list(attr(tt, "variables"))[-1]) {
+      x <- fr[[deparse1(v)]]
+      if (is.factor(x) && nlevels(x) < nlevels(eval(v, data, env))) {
+        warning("unobserved levels of ", sQuote(deparse1(v)),
+                " were dropped, so AR(1) lags count only the remaining levels; ",
+                "use glmmTMBControl(drop_unused_levels = FALSE) or ou() with numFactor() times",
+                call. = FALSE)
+      }
+    }
   }
 }
 

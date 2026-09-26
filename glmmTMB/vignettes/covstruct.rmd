@@ -142,6 +142,14 @@ It is a common mistake to forget some factor levels due to missing
 data or to order the levels incorrectly. We therefore recommend
 constructing factors with explicit levels, using the `levels` argument to
 the `factor` function (in the function above we use `levels = 1:n`).
+However, by default `glmmTMB` drops factor levels that no observation
+uses, so time points that are never observed are lost and the lags
+between the remaining ones become too short (`glmmTMB` warns when this
+happens). To keep them, use
+`control = glmmTMBControl(drop_unused_levels = FALSE)` (this applies to
+all factors in the model), or use `ou()` with `numFactor()` times (see
+[Ornstein–Uhlenbeck]). With `hetar1()`, the standard deviation of a time
+point that is never observed cannot be estimated.
 
 Now fit the model using
 
