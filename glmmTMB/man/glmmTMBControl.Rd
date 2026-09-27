@@ -66,7 +66,7 @@ To trace OpenMP settings, use \code{options(glmmTMB_openmp_debug = TRUE)}.}
 
 \item{full_cor}{compute full correlation matrices? can be either a length-1 logical vector (TRUE/FALSE) to include full correlation matrices for all or none of the random-effect terms in the model, or a logical vector with length equal to the number of correlation matrices, to include/exclude correlation matrices individually}
 
-\item{drop_unused_levels}{drop unused levels in grouping variables?}
+\item{drop_unused_levels}{drop unused levels of all factors in the model, including grouping variables and \code{ar1}/\code{hetar1} time factors?}
 
 \item{use_rtmb}{override the global \code{\link{useRTMB}} setting for this fit only? \code{NULL} leaves the current setting unchanged; \code{TRUE} uses the RTMB backend for this fit and then restores the previous setting; \code{FALSE} similarly uses the TMB backend for this fit and then restores the previous setting.}
 }

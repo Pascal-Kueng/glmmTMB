@@ -119,6 +119,12 @@ test_that("warn when unobserved ar1 time levels are dropped (GH #1278)", {
                    "unobserved levels")
     expect_no_warning(glmmTMB(Reaction ~ ar1(fday + 0 | Subject), dd, doFit = FALSE,
                               control = glmmTMBControl(drop_unused_levels = FALSE)))
+    ## control lists without drop_unused_levels (glmmTMB <= 1.1.14) still drop levels
+    ctrl <- glmmTMBControl()
+    ctrl$drop_unused_levels <- NULL
+    expect_warning(glmmTMB(Reaction ~ ar1(fday + 0 | Subject), dd, doFit = FALSE,
+                           control = ctrl),
+                   "unobserved levels")
 })
 
 ## FIXME: simpler to check formatVC() directly?

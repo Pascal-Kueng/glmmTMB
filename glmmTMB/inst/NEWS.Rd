@@ -14,6 +14,13 @@
       (GH #1278, Pascal Küng)
     } % itemize
   } % user-visible changes
+  \subsection{BUG FIXES}{
+    \itemize{
+      \item a \code{control} list without \code{drop_unused_levels}
+      (e.g. created with glmmTMB 1.1.14 or earlier) now drops unused
+      factor levels, like the default, instead of keeping them (GH #1278)
+    } % itemize
+  } % bug fixes
 } % 1.1.15.9000
 
 \section{CHANGES IN VERSION 1.1.15}{
@@ -87,6 +94,11 @@
       back-end, which allows more flexibility without a performance
       cost; the TMB back-end will be maintained for at least the
       next few releases, although new features may be RTMB-only.
+      \item new \code{drop_unused_levels} argument to
+      \code{glmmTMBControl()}: \code{FALSE} keeps levels of factors that
+      no observation uses, e.g. time points of an \code{ar1()} term that
+      are never observed; the default \code{TRUE} drops them, as before
+      (GH #1278)
     } % itemize
   } % new features
  \subsection{BUG FIXES}{

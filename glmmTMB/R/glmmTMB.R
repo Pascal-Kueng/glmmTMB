@@ -1436,7 +1436,7 @@ glmmTMB <- function(
                names(mf), 0L)
     ## FIXME: could break if formula is not specified first ???
     mf <- mf[c(1L, m)]
-    mf$drop.unused.levels <- control$drop_unused_levels
+    mf$drop.unused.levels <- control$drop_unused_levels %||% TRUE
     mf[[1]] <- as.name("model.frame")
     mf$data <- data ## propagate ..offset modification?
 
@@ -1610,7 +1610,7 @@ glmmTMB <- function(
 ##' @param rank_check Check whether all parameters in fixed-effects models are identifiable? This test may be slow for models with large numbers of fixed-effect parameters, therefore default value is 'warning'. Alternatives include 'skip' (no check), 'stop' (throw an error), and 'adjust' (drop redundant columns from the fixed-effect model matrix).
 ##' @param conv_check Do basic checks of convergence (check for non-positive definite Hessian and non-zero convergence code from optimizer). Default is 'warning'; 'skip' ignores these tests (not recommended for general use!)
 ##' @param full_cor compute full correlation matrices? can be either a length-1 logical vector (TRUE/FALSE) to include full correlation matrices for all or none of the random-effect terms in the model, or a logical vector with length equal to the number of correlation matrices, to include/exclude correlation matrices individually
-##' @param drop_unused_levels drop unused levels in grouping variables?
+##' @param drop_unused_levels drop unused levels of all factors in the model, including grouping variables and \code{ar1}/\code{hetar1} time factors?
 ##' @param use_rtmb override the global \code{\link{useRTMB}} setting for this fit only? \code{NULL} leaves the current setting unchanged; \code{TRUE} uses the RTMB backend for this fit and then restores the previous setting; \code{FALSE} similarly uses the TMB backend for this fit and then restores the previous setting.
 ##' @details
 ##' By default, \code{\link{glmmTMB}} uses the nonlinear optimizer
