@@ -94,6 +94,10 @@ rewriteKron <- function(x) {
         if (!all(vapply(margins, function(e) is.call(e) && length(e) %in% 2:3, NA)))
             stop("kron() margins must look like us(1 + x) or propto(0 + f, C)",
                  call. = FALSE)
+        has_bar <- function(e) any(c("|", "||") %in% all.names(e[[2]]))
+        if (any(vapply(margins, has_bar, NA)))
+            stop("kron() margins take no grouping bar: use one outer bar, as in ",
+                 "kron(us(0 + f1) %x% ar1(0 + f2) | g)", call. = FALSE)
         lhs <- Reduce(function(a, b) call("+", a, b), lapply(margins, `[[`, 2))
         spec <- as.call(c(quote(list), lapply(margins, function(e)
             call("list", struc = deparse(e[[1]]), lhs = call("quote", e[[2]]),
