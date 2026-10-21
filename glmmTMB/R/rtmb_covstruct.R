@@ -649,8 +649,8 @@ kron_nll <- function(U, theta, term) {
   "[<-" <- RTMB::ADoverload("[<-")
   margins <- term$margins
 
-  ## Each margin's full theta: its fixed values, with the estimated ones
-  ## filled in
+  ## Each margin's full theta: its start values from getReStruc(), with the
+  ## estimated ones replaced by theta
   margin_theta <- unlist(lapply(margins, `[[`, "theta"))
   margin_theta[unlist(lapply(margins, `[[`, "free"))] <- theta
   margin_theta <- split(margin_theta, rep(seq_along(margins),
@@ -667,27 +667,28 @@ kron_nll <- function(U, theta, term) {
     U[] <- U$getOrig(seq_along(U))
   } else {
     ## Fitting, or simulating new values (simCode "random"). dseparable()'s
-    ## first density acts on the first (fastest) dimension of U, which is the
+    ## first density acts on the first (fastest) dimension of b, which is the
     ## last margin: hence rev(). The groups come last (iid). New values are
     ## drawn into a new simref: U can be assigned only once, after the rr
     ## margins below
-    x <- if (simulation) RTMB::simref(length(U)) else U
-    dim(x) <- c(rev(vapply(margins, `[[`, 0, "blockSize")), term$blockReps)
+    b <- if (simulation) RTMB::simref(length(U)) else U
+    dim(b) <- c(rev(vapply(margins, `[[`, 0, "blockSize")), term$blockReps)
     iid_logdens <- function(x) sum(RTMB::dnorm(x, log = TRUE))
-    nll <- -do.call(RTMB::dseparable, c(rev(margin_logdens), iid_logdens))(x)
-    if (simulation) x <- x$value
-    ## An rr margin's density is that of its iid latent variables: multiply
-    ## them by its loadings, with termwise_nll() on x permuted so that the
-    ## margin's dimension comes first (as in glmmTMB#1353)
+    nll <- -do.call(RTMB::dseparable, c(rev(margin_logdens), iid_logdens))(b)
+    if (simulation) b <- b$value
+    ## dseparable() used each rr margin's iid latent variables: multiply them
+    ## by the loadings with termwise_nll(), which works along the first
+    ## dimension, after permuting b to put the margin's dimension first (as in
+    ## glmmTMB#1353)
     for (k in which(vapply(margins, `[[`, "", "blockName") == "rr")) {
-      p <- length(margins) + 1 - k # margin k's dimension in x
-      idx <- as.vector(aperm(array(seq_along(x), dim(x)),
-                             c(p, seq_along(dim(x))[-p])))
+      p <- length(margins) + 1 - k # margin k's dimension in b
+      idx <- as.vector(aperm(array(seq_along(b), dim(b)),
+                             c(p, seq_along(dim(b))[-p])))
       margin <- margins[[k]]
-      margin$blockReps <- length(x) / margin$blockSize
-      x[idx] <- termwise_nll(x[idx], margin_theta[[k]], margin)$u
+      margin$blockReps <- length(b) / margin$blockSize
+      b[idx] <- termwise_nll(b[idx], margin_theta[[k]], margin)$u
     }
-    if (simulation) U[] <- x else U <- x
+    if (simulation) U[] <- b else U <- b
   }
 
   ## Report each margin like a term of its own; only its corr and sd are

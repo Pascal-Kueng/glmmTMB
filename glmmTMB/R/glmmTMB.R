@@ -1187,13 +1187,13 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
             coords <- parseNumLevels(reTrms$cnms[[i]])
             tmp$dist <- as.matrix( dist(coords) )
         } else if(ss[i] == "kron") {
-            margins <- aa[[i]] # from rewriteKron() and getXReTrms()
-            margin_strucs <- vapply(margins, `[[`, "", "struc")
-            n_margins <- length(margins)
+            margin_specs <- aa[[i]] # from rewriteKron() and getXReTrms()
+            margin_strucs <- vapply(margin_specs, `[[`, "", "struc")
+            n_margins <- length(margin_specs)
             if ("kron" %in% margin_strucs)
                 stop("kron() margins cannot be kron")
             ## column names per margin (also used by VarCorr())
-            tmp$cnms <- lapply(margins, `[[`, "cnms")
+            tmp$cnms <- lapply(margin_specs, `[[`, "cnms")
             ## pass the margins back through getReStruc() as terms of a grouping
             ## factor with one level, so each margin gets the usual checks and
             ## parameter count
@@ -1201,25 +1201,27 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
                 flist = structure(list(factor(1)), assign = rep(1, n_margins)),
                 Gp = cumsum(c(0, lengths(tmp$cnms))),
                 cnms = tmp$cnms)
-            margin_reXterms <- lapply(margins, function(m)
+            margin_reXterms <- lapply(margin_specs, function(m)
                 terms(as.formula(call("~", m$lhs))))
             tmp$margins <- getReStruc(margin_reTrms, ss = margin_strucs,
-                                      aa = lapply(margins, `[[`, "arg"),
+                                      aa = lapply(margin_specs, `[[`, "arg"),
                                       reXterms = margin_reXterms, fr = fr,
                                       full_cor = rep(full_cor[i], n_margins))
-            ## each margin's theta: start values, and which are estimated
-            ## (propto and equalto fix their matrix). The first margin with a
-            ## free scale carries the variance; later margins fix their scale:
-            ## the first log-SD at 0 (SD 1), rr's first loading at 1, or
-            ## propto's log-lambda at 0
+            ## each margin stores its start values ("theta") and which of them
+            ## are estimated ("free"); the others stay fixed at their start
+            ## values: those set by a propto or equalto matrix, and the scale of
+            ## later margins (first log-SD 0, i.e. SD 1; rr's first loading 1;
+            ## propto's log-lambda 0). The first margin with a free scale
+            ## carries the variance.
             has_scale <- FALSE
             for (k in seq_len(n_margins)) {
                 m <- tmp$margins[[k]]
                 struc <- margin_strucs[k]
                 if (struc == "propto")
-                    checkProptoNames(margins[[k]]$arg, tmp$cnms[[k]], margin_reXterms[[k]])
+                    checkProptoNames(margin_specs[[k]]$arg, tmp$cnms[[k]],
+                                     margin_reXterms[[k]])
                 m$theta <- startTheta(struc, numeric(m$blockNumTheta),
-                                      margins[[k]]$arg, tmp$cnms[[k]])
+                                      margin_specs[[k]]$arg, tmp$cnms[[k]])
                 m$free <- !is.na(mapStrucTheta(struc, seq_len(m$blockNumTheta)))
                 scale <- if (struc == "propto") m$blockNumTheta else 1
                 if (m$free[scale]) {
@@ -1343,7 +1345,7 @@ binomialType <- function(x) {
 ##' \item \code{homdiag} (diagonal, homogeneous variance)
 ##' \item \code{propto} (* proportional to user-specified variance-covariance matrix)
 ##' \item \code{equalto} (* equal to user-specified variance-covariance matrix)
-##' \item \code{kron} (* Kronecker product of two or more of the structures above, e.g. \code{kron(us(0 + trait) \%x\% ar1(0 + time) | subject)} or \code{kron(us(1 + x) \%x\% propto(0 + species, C) | g)}; RTMB back-end only. The first margin sets the overall scale; later margins have their scale fixed, e.g. their first standard deviation at 1)
+##' \item \code{kron} (* Kronecker product of two or more of the structures above (its margins), e.g. \code{kron(us(0 + trait) \%x\% ar1(0 + time) | subject)} or \code{kron(us(1 + x) \%x\% propto(0 + species, C) | g)}; RTMB back-end only. The first margin sets the overall scale; later margins have their scale fixed, e.g. their first standard deviation at 1)
 ##' }
 ##' Structures marked with * are experimental/untested. See \code{vignette("covstruct", package = "glmmTMB")} for more information.
 ##' \item For backward compatibility, the \code{family} argument can also be specified as a list comprising the name of the distribution and the link function (e.g. \code{list(family="binomial", link="logit")}). However, \strong{this alternative is now deprecated}; it produces a warning and will be removed at some point in the future. Furthermore, certain capabilities such as Pearson residuals or predictions on the data scale will only be possible if components such as \code{variance} and \code{linkfun} are present, see \code{\link{family}}.
