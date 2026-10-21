@@ -641,20 +641,20 @@ termwise_nll <- function(U, theta, term) {
 ## termwise_nll() for a kron() term. The density of U, with covariance
 ## kronecker(margin 1, margin 2, ...), is built from the margins' own
 ## densities with RTMB::dseparable(). As in kronecker(), the last margin varies
-## fastest; the groups form an extra iid margin. The first margin carries the
-## variance: later margins have their first theta (a log-SD) fixed at 0 (SD 1).
+## fastest; the groups form an extra iid margin. theta holds only the margins'
+## estimated parameters; the fixed ones (e.g. the scale of later margins) are
+## set in getReStruc().
 kron_nll <- function(U, theta, term) {
-  ## Preserve automatic differentiation in c(0, th) below
-  "c" <- RTMB::ADoverload("c")
+  ## Preserve automatic differentiation when filling in theta below
+  "[<-" <- RTMB::ADoverload("[<-")
   margins <- term$margins
 
-  ## Split theta by margin and put back the fixed log-SD of later margins;
-  ## factor() keeps an empty element for a later margin with no free theta
-  ## (e.g. homdiag)
-  n_free_theta <- vapply(margins, `[[`, 0, "blockNumTheta")
-  n_free_theta[-1] <- n_free_theta[-1] - 1
-  margin_theta <- split(theta, rep(factor(seq_along(margins)), n_free_theta))
-  margin_theta[-1] <- lapply(margin_theta[-1], function(th) c(0, th))
+  ## Each margin's full theta: its fixed values, with the estimated ones
+  ## filled in
+  margin_theta <- unlist(lapply(margins, `[[`, "theta"))
+  margin_theta[unlist(lapply(margins, `[[`, "free"))] <- theta
+  margin_theta <- split(margin_theta, rep(seq_along(margins),
+                                          vapply(margins, `[[`, 0, "blockNumTheta")))
   margin_logdens <- Map(function(th, margin) {
     function(x) -termwise_nll(x, th, margin)$nll
   }, margin_theta, margins)

@@ -71,29 +71,33 @@ parseNumLevels <- function(levels) {
     ans
 }
 
-## Rewrite each kron(A(lhs1) %x% B(lhs2) | g) in a formula into the internal
-## form kron(lhs1 + lhs2 | g, list(list(struc = "A", lhs = quote(lhs1)), ...)),
+## Rewrite each kron(A(lhs1) %x% B(lhs2, arg) | g) in a formula into the
+## internal form
+##   kron(lhs1 + lhs2 | g, list(list(struc = "A", lhs = quote(lhs1), arg = NA),
+##                              list(struc = "B", lhs = quote(lhs2), arg = arg)))
 ## parsed like rr(0 + f | g, 2). The first argument only puts the margins'
 ## variables into the model frame: getXReTrms() builds Z from the margins.
 rewriteKron <- function(x) {
     ## Rewrite only the one-argument user syntax, not the internal form
     if (identical(x[[1]], quote(kron)) && length(x) == 2) {
-        ## A(lhs1) %x% B(lhs2) %x% ...  ->  list(A(lhs1), B(lhs2), ...)
+        ## A(lhs1) %x% B(lhs2, arg) %x% ...  ->  list(A(lhs1), B(lhs2, arg), ...)
         flatten <- function(e) {
             if (!is.call(e) || !identical(e[[1]], quote(`%x%`))) return(list(e))
             c(flatten(e[[2]]), flatten(e[[3]]))
         }
-        bar <- x[[2]] # A(lhs1) %x% B(lhs2) | g
+        bar <- x[[2]] # A(lhs1) %x% B(lhs2, arg) | g
         ## Require "| g" (a "|| g" is read as "| g", as for other structures)
         if (!is.call(bar) || !deparse1(bar[[1]]) %in% c("|", "||"))
             stop("kron() needs a grouping factor, as in ",
                  "kron(us(0 + f1) %x% ar1(0 + f2) | g)", call. = FALSE)
         margins <- flatten(bar[[2]])
-        if (!all(vapply(margins, function(e) is.call(e) && length(e) == 2, NA)))
-            stop("kron() margins must look like us(1 + x) or ar1(0 + f)", call. = FALSE)
+        if (!all(vapply(margins, function(e) is.call(e) && length(e) %in% 2:3, NA)))
+            stop("kron() margins must look like us(1 + x) or propto(0 + f, C)",
+                 call. = FALSE)
         lhs <- Reduce(function(a, b) call("+", a, b), lapply(margins, `[[`, 2))
         spec <- as.call(c(quote(list), lapply(margins, function(e)
-            call("list", struc = deparse(e[[1]]), lhs = call("quote", e[[2]])))))
+            call("list", struc = deparse(e[[1]]), lhs = call("quote", e[[2]]),
+                 arg = if (length(e) == 3) e[[3]] else NA))))
         ## Split nested groups here (g/h -> h:g and g, as for us(0 + f | g/h)):
         ## splitForm() does not split them in terms with a second argument
         groups <- reformulas::expandGrpVar(bar[[3]])

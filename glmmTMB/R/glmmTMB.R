@@ -470,7 +470,7 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
     data.tmb <- c(data.tmb, Xlist, prior_struc)
 
   ## identify covariance structures that have non-default theta values
-  ndThetaStruc <- function(lst) any(lst$ss %in% c("rr", "propto", "equalto"))
+  ndThetaStruc <- function(lst) any(lst$ss %in% c("rr", "propto", "equalto", "kron"))
 
   getVal <- function(obj, component)
     vapply(obj, function(x) x[[component]], numeric(1))
@@ -512,7 +512,9 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
       tl <- split(theta, thetaseq)
       for(i in 1:length(blockCode)){
         cls <- names(.valid_covstruct)[match(blockCode[i], .valid_covstruct)]
-        tl[[i]] <- startTheta(cls, tl[[i]], List[["aa"]][[i]], List$reTrms$cnms[[i]])
+        tl[[i]] <- if (cls == "kron") { # the margins' estimated theta, see getReStruc()
+            unlist(lapply(ReStruc[[i]]$margins, function(m) m$theta[m$free]))
+        } else startTheta(cls, tl[[i]], List[["aa"]][[i]], List$reTrms$cnms[[i]])
       }
       theta <- unlist(tl, use.names = F)
     }
@@ -1183,8 +1185,8 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
             margins <- aa[[i]] # from rewriteKron() and getXReTrms()
             margin_strucs <- vapply(margins, `[[`, "", "struc")
             n_margins <- length(margins)
-            if (any(margin_strucs %in% c("rr", "propto", "equalto", "kron")))
-                stop("kron() margins cannot be rr, propto, equalto or kron")
+            if (any(margin_strucs %in% c("rr", "kron")))
+                stop("kron() margins cannot be rr or kron")
             ## column names per margin (also used by VarCorr())
             tmp$cnms <- lapply(margins, `[[`, "cnms")
             ## pass the margins back through getReStruc() as terms of a grouping
@@ -1197,12 +1199,30 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
             margin_reXterms <- lapply(margins, function(m)
                 terms(as.formula(call("~", m$lhs))))
             tmp$margins <- getReStruc(margin_reTrms, ss = margin_strucs,
+                                      aa = lapply(margins, `[[`, "arg"),
                                       reXterms = margin_reXterms, fr = fr,
                                       full_cor = rep(full_cor[i], n_margins))
-            ## the first margin carries the variance: each later margin's first
-            ## log-SD is fixed at 0 (SD 1), so it is not counted
-            margin_num_theta <- vapply(tmp$margins, `[[`, 0, "blockNumTheta")
-            tmp$blockNumTheta <- sum(margin_num_theta) - (n_margins - 1)
+            ## each margin's theta: start values, and which are estimated
+            ## (propto and equalto fix their matrix). The first margin with a
+            ## free scale carries the variance; later margins fix their scale:
+            ## the first log-SD at 0 (SD 1), or propto's log-lambda at 0
+            has_scale <- FALSE
+            for (k in seq_len(n_margins)) {
+                m <- tmp$margins[[k]]
+                struc <- margin_strucs[k]
+                if (struc == "propto")
+                    checkProptoNames(margins[[k]]$arg, tmp$cnms[[k]], margin_reXterms[[k]])
+                m$theta <- startTheta(struc, numeric(m$blockNumTheta),
+                                      margins[[k]]$arg, tmp$cnms[[k]])
+                m$free <- !is.na(mapStrucTheta(struc, seq_len(m$blockNumTheta)))
+                scale <- if (struc == "propto") m$blockNumTheta else 1
+                if (m$free[scale]) {
+                    m$free[scale] <- !has_scale
+                    has_scale <- TRUE
+                }
+                tmp$margins[[k]] <- m
+            }
+            tmp$blockNumTheta <- sum(unlist(lapply(tmp$margins, `[[`, "free")))
         }
         ans[[i]] <- tmp
     }

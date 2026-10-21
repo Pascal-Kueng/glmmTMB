@@ -84,6 +84,39 @@ test_that("kron() margins can have intercepts and slopes", {
   expect_equal(-as.numeric(logLik(f3)), nll, tolerance = tol_logLik)
 })
 
+test_that("kron() margins can be propto or equalto", {
+  ## glmmTMB() looks up the matrices from where it is called, so call it here
+  ctl <- glmmTMBControl(use_rtmb = TRUE)
+  ## as a later margin, propto's scale is fixed: with an identity matrix it
+  ## is the identity
+  I_time <- diag(5)
+  dimnames(I_time) <- rep(list(paste0("time", 1:5)), 2)
+  f1 <- glmmTMB(y2 ~ kron(us(0 + member) %x% propto(0 + time, I_time) | dyad),
+                data = kron_data, control = ctl)
+  f2 <- fit_rtmb(y2 ~ us(0 + member | dyad:time))
+  expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
+  ## an equalto first margin has no free scale, so the next margin keeps its own
+  f3 <- glmmTMB(y ~ kron(equalto(0 + member, S_member) %x% ar1(0 + time) | dyad),
+                data = kron_data, control = ctl)
+  expect_equal(c(VarCorr(f3)$cond[[1]]), c(S_member))
+  expect_length(getME(f3, "theta"), 2)
+  ## from glmmTMB#1353: diag(0 + DOP) is a 1 x 1 slope margin, so this is
+  ## propto(0 + spp:DOP | site:sample, C)
+  data("Salamanders", package = "glmmTMB")
+  namedC <- function(nm) {
+    C <- 0.5^abs(outer(seq_along(nm), seq_along(nm), "-"))
+    dimnames(C) <- list(nm, nm)
+    C
+  }
+  C_spp <- namedC(levels(Salamanders$spp))
+  C_sppDOP <- namedC(colnames(model.matrix(~ 0 + spp:DOP, Salamanders)))
+  f4 <- glmmTMB(count ~ spp + kron(diag(0 + DOP) %x% propto(0 + spp, C_spp) | site:sample),
+                data = Salamanders, family = poisson, control = ctl)
+  f5 <- glmmTMB(count ~ spp + propto(0 + spp:DOP | site:sample, C_sppDOP),
+                data = Salamanders, family = poisson, control = ctl)
+  expect_equal(logLik(f4), logLik(f5), tolerance = tol_logLik)
+})
+
 test_that("kron() works next to other terms", {
   dd <- transform(kron_data, site = factor(as.integer(dyad) %% 5))
   dd$y <- dd$y + rnorm(5)[dd$site]
