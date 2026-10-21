@@ -885,6 +885,28 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         }
         aa <- lapply(ss$reTrmAddArgs, get_arg)
 
+        ## kron() terms: Z is the row-wise Kronecker (Khatri-Rao) product of
+        ## the grouping indicators and the margins' model matrices, with the
+        ## last margin varying fastest, as in kronecker()
+        for (i in which(ss$reTrmClasses == "kron")) {
+            Xt <- lapply(aa[[i]], function(m)
+                t(model.matrix(as.formula(call("~", m$lhs)), fr)))
+            ## keep each margin's column names for getReStruc()
+            aa[[i]] <- Map(function(m, x) c(m, list(cnms = rownames(x))), aa[[i]], Xt)
+            g <- reTrms$flist[[attr(reTrms$flist, "assign")[i]]]
+            Zt <- Reduce(Matrix::KhatriRao, Xt,
+                         Matrix::fac2sparse(g, to = "d", drop.unused.levels = FALSE))
+            reTrms$cnms[[i]] <- Reduce(function(a, b)
+                paste(rep(a, each = length(b)), b, sep = ":"), lapply(Xt, rownames))
+            dimnames(Zt) <- list(rep(levels(g), each = length(reTrms$cnms[[i]])),
+                                 colnames(reTrms$Ztlist[[i]]))
+            reTrms$Ztlist[[i]] <- Zt
+        }
+        if ("kron" %in% ss$reTrmClasses) {
+            reTrms$Zt <- do.call(rbind, reTrms$Ztlist)
+            reTrms$Gp <- cumsum(c(0L, vapply(reTrms$Ztlist, nrow, 0L)))
+        }
+
         ## terms for the model matrix in each RE term
         ## this is imperfect: it should really be done in mkReTrms/mkBlist,
         ## where we are generating these terms anyway on the way
@@ -1137,27 +1159,22 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
             coords <- parseNumLevels(reTrms$cnms[[i]])
             tmp$dist <- as.matrix( dist(coords) )
         } else if(ss[i] == "kron") {
-            margin_strucs <- aa[[i]] # e.g. c("us", "ar1"), from rewriteKron()
-            ## rev() undoes rewriteKron()'s reversal of the factors, giving the
-            ## margins in the order written
-            margin_levels <- rev(.getXlevels(reXterms[[i]], fr))
-            n_margins <- length(margin_levels)
-            ## .getXlevels() skips numeric margins, so they fail this check
-            if (n_margins != length(margin_strucs))
-                stop("kron() margins must look like us(0 + f), with f a factor")
+            margins <- aa[[i]] # from rewriteKron() and getXReTrms()
+            margin_strucs <- vapply(margins, `[[`, "", "struc")
+            n_margins <- length(margins)
             if (any(margin_strucs %in% c("rr", "propto", "equalto", "kron")))
                 stop("kron() margins cannot be rr, propto, equalto or kron")
             ## column names per margin (also used by VarCorr())
-            tmp$cnms <- Map(paste0, names(margin_levels), margin_levels)
+            tmp$cnms <- lapply(margins, `[[`, "cnms")
             ## pass the margins back through getReStruc() as terms of a grouping
             ## factor with one level, so each margin gets the usual checks and
             ## parameter count
             margin_reTrms <- list(
                 flist = structure(list(factor(1)), assign = rep(1, n_margins)),
-                Gp = cumsum(c(0, lengths(margin_levels))),
+                Gp = cumsum(c(0, lengths(tmp$cnms))),
                 cnms = tmp$cnms)
-            margin_reXterms <- lapply(names(margin_levels),
-                                      function(v) terms(reformulate(v)))
+            margin_reXterms <- lapply(margins, function(m)
+                terms(as.formula(call("~", m$lhs))))
             tmp$margins <- getReStruc(margin_reTrms, ss = margin_strucs,
                                       reXterms = margin_reXterms, fr = fr,
                                       full_cor = rep(full_cor[i], n_margins))

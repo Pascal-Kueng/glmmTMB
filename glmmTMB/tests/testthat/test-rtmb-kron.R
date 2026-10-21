@@ -66,6 +66,24 @@ test_that("three-margin kron() matches ar1()", {
   expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
 })
 
+test_that("kron() margins can have intercepts and slopes", {
+  ## homdiag() as a later margin is the identity (its SD is fixed at 1)
+  f1 <- fit_rtmb(y ~ x + kron(us(1 + x) %x% homdiag(0 + time) | dyad))
+  f2 <- fit_rtmb(y ~ x + us(1 + x | dyad:time))
+  expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
+  ## dense marginal likelihood, as above
+  f3 <- fit_rtmb(y ~ x + kron(us(1 + x) %x% ar1(0 + time) | dyad))
+  vc <- VarCorr(f3)$cond
+  Z <- as.matrix(getME(f3, "Z"))
+  V <- Z %*% kronecker(diag(25), kronecker(vc[[1]], vc[[2]])) %*% t(Z) +
+    sigma(f3)^2 * diag(nrow(kron_data))
+  res <- kron_data$y - getME(f3, "X") %*% fixef(f3)$cond
+  R <- chol(V)
+  z <- backsolve(R, res, transpose = TRUE)
+  nll <- sum(log(diag(R))) - sum(dnorm(z, log = TRUE))
+  expect_equal(-as.numeric(logLik(f3)), nll, tolerance = tol_logLik)
+})
+
 test_that("kron() works next to other terms", {
   dd <- transform(kron_data, site = factor(as.integer(dyad) %% 5))
   dd$y <- dd$y + rnorm(5)[dd$site]
@@ -112,7 +130,7 @@ test_that("kron() gives clear errors", {
     "needs the RTMB back-end")
   expect_error(fit_rtmb(y ~ kron(rr(0 + member) %x% ar1(0 + time) | dyad)),
                "cannot be rr")
-  expect_error(fit_rtmb(y ~ kron(us(member) %x% ar1(0 + time) | dyad)),
+  expect_error(fit_rtmb(y ~ kron(us(0 + member) %x% time | dyad)),
                "must look like")
   expect_error(fit_rtmb(y ~ kron(us(0 + member) %x% ar1(0 + time))),
                "needs a grouping factor")
