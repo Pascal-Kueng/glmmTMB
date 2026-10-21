@@ -83,7 +83,7 @@ ctab <- read.delim(sep = "#", comment = "",
  Reduced-rank                     # `rr`          #  $nd-d(d-1)/2$  # rank (d)    # Factor loading matrix (see [Reduced-rank])
  Proportional                       # `propto`      #  $1$            # Variance-covariance matrix # log(proportionality constant)
  Equal                            # `equalto`     #  $0$            # Variance-covariance matrix # -
- Kronecker product                # `kron`        #  margins' total $-(k-1)$ # RTMB back-end # the $k$ margins' parameters in order, without the first log-SD of each later margin (fixed at 0; see [Kronecker products])
+ Kronecker product                # `kron`        #  margins' free parameters # RTMB back-end # the $k$ margins' parameters in order, without the fixed ones (see [Kronecker products])
 "
 )
 knitr::kable(ctab)
@@ -822,7 +822,7 @@ In most meta-analysis applications we want we set the right-hand grouping term `
 
 ## Kronecker products
 
-`kron()` combines two or more of the structures listed above, except `rr`, `propto` and `equalto`. Each component is called a *margin*. Their Kronecker product gives a *separable* covariance.
+`kron()` combines two or more of the structures listed above. Each component is called a *margin*. Their Kronecker product gives a *separable* covariance.
 
 Consider two outcomes, or traits, measured repeatedly on each subject. The term `kron(us(0 + trait) %x% ar1(0 + time) | subject)` combines an unstructured trait covariance with AR(1) correlation over time. It gives each subject one random effect $u_{it}$ for each trait $i$ and time point $t$. Within a subject, the covariance between two such random effects is
 
@@ -830,8 +830,8 @@ $$\textrm{Cov}(u_{it}, u_{js}) = \Sigma_{ij} \, \phi^{|t-s|}.$$
 
 Here $i$ and $j$ index traits, and $t$ and $s$ index equally spaced time points. The matrix $\Sigma$ contains the trait variances and covariance, while $\phi$ is the correlation between adjacent time points. The trait covariance matrix stays the same at every time point, and both traits share the same AR(1) pattern. Random effects from different subjects are independent.
 
-- Each margin takes one factor and no intercept, as in `us(0 + trait)`. Use a `numFactor()` variable for `ou`, `exp`, `gau` and `mat`.
-- In each later margin, the first standard deviation is fixed at 1, so the first margin sets the overall scale.
+- Each margin is written like a random-effects term without its bar, e.g. `us(0 + trait)`, `us(1 + x)` (intercepts and slopes) or `propto(0 + species, C)`. Use a `numFactor()` variable for `ou`, `exp`, `gau` and `mat`.
+- The first margin sets the overall scale. In each later margin, the first standard deviation is fixed at 1 (for `rr`, the first loading; for `propto`, the proportionality constant). If the first margin is `equalto`, the next one sets the scale.
 - `kron()` requires the RTMB back-end.
 
 The Gaussian example below gives each trait its own mean. We use `dispformula = ~0` to fix the independent residual variance close to zero, so the `kron()` term accounts for essentially all residual covariance (as `TYPE=UN@AR(1)` in SAS).
