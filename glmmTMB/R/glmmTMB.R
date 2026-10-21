@@ -877,22 +877,25 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         }
         aa <- lapply(ss$reTrmAddArgs, get_arg)
 
-        ## kron() terms: Z is the row-wise Kronecker (Khatri-Rao) product of
-        ## the grouping indicators and the margins' model matrices, with the
-        ## last margin varying fastest, as in kronecker()
+        ## kron() terms: replace the Z that mkReTrms() built from the first
+        ## argument by the row-wise Kronecker (Khatri-Rao) product of the
+        ## grouping indicators and the margins' model matrices, with the last
+        ## margin varying fastest, as in kronecker()
         for (i in which(ss$reTrmClasses == "kron")) {
             Xt <- lapply(aa[[i]], function(m)
                 t(model.matrix(as.formula(call("~", m$lhs)), fr)))
             ## keep each margin's column names for getReStruc()
             aa[[i]] <- Map(function(m, x) c(m, list(cnms = rownames(x))), aa[[i]], Xt)
+            ## product of the margins, named like interactions (e.g. "time1:trait1")
+            Xt_kron <- Reduce(function(a, b)
+                Matrix::KhatriRao(a, b, make.dimnames = TRUE), Xt)
             g <- reTrms$flist[[attr(reTrms$flist, "assign")[i]]]
-            Zt <- Reduce(Matrix::KhatriRao, Xt,
-                         Matrix::fac2sparse(g, to = "d", drop.unused.levels = FALSE))
-            reTrms$cnms[[i]] <- Reduce(function(a, b)
-                paste(rep(a, each = length(b)), b, sep = ":"), lapply(Xt, rownames))
-            dimnames(Zt) <- list(rep(levels(g), each = length(reTrms$cnms[[i]])),
+            Zt <- Matrix::KhatriRao(
+                Matrix::fac2sparse(g, to = "d", drop.unused.levels = FALSE), Xt_kron)
+            dimnames(Zt) <- list(rep(levels(g), each = nrow(Xt_kron)),
                                  colnames(reTrms$Ztlist[[i]]))
             reTrms$Ztlist[[i]] <- Zt
+            reTrms$cnms[[i]] <- rownames(Xt_kron)
         }
         if ("kron" %in% ss$reTrmClasses) {
             reTrms$Zt <- do.call(rbind, reTrms$Ztlist)
