@@ -1185,8 +1185,8 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
             margins <- aa[[i]] # from rewriteKron() and getXReTrms()
             margin_strucs <- vapply(margins, `[[`, "", "struc")
             n_margins <- length(margins)
-            if (any(margin_strucs %in% c("rr", "kron")))
-                stop("kron() margins cannot be rr or kron")
+            if ("kron" %in% margin_strucs)
+                stop("kron() margins cannot be kron")
             ## column names per margin (also used by VarCorr())
             tmp$cnms <- lapply(margins, `[[`, "cnms")
             ## pass the margins back through getReStruc() as terms of a grouping
@@ -1205,7 +1205,8 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
             ## each margin's theta: start values, and which are estimated
             ## (propto and equalto fix their matrix). The first margin with a
             ## free scale carries the variance; later margins fix their scale:
-            ## the first log-SD at 0 (SD 1), or propto's log-lambda at 0
+            ## the first log-SD at 0 (SD 1), rr's first loading at 1, or
+            ## propto's log-lambda at 0
             has_scale <- FALSE
             for (k in seq_len(n_margins)) {
                 m <- tmp$margins[[k]]

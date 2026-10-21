@@ -117,6 +117,12 @@ test_that("kron() margins can be propto or equalto", {
   expect_equal(logLik(f4), logLik(f5), tolerance = tol_logLik)
 })
 
+test_that("kron() margins can be rr", {
+  f1 <- fit_rtmb(y2 ~ kron(rr(0 + member, 1) %x% homdiag(0 + time) | dyad))
+  f2 <- fit_rtmb(y2 ~ rr(0 + member | dyad:time, 1))
+  expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
+})
+
 test_that("kron() works next to other terms", {
   dd <- transform(kron_data, site = factor(as.integer(dyad) %% 5))
   dd$y <- dd$y + rnorm(5)[dd$site]
@@ -161,8 +167,8 @@ test_that("kron() gives clear errors", {
     glmmTMB(y ~ kron(us(0 + member) %x% ar1(0 + time) | dyad),
             data = kron_data, control = glmmTMBControl(use_rtmb = FALSE)),
     "needs the RTMB back-end")
-  expect_error(fit_rtmb(y ~ kron(rr(0 + member) %x% ar1(0 + time) | dyad)),
-               "cannot be rr")
+  expect_error(fit_rtmb(y ~ kron(us(0 + member) %x% kron(0 + time) | dyad)),
+               "cannot be kron")
   expect_error(fit_rtmb(y ~ kron(us(0 + member) %x% time | dyad)),
                "must look like")
   expect_error(fit_rtmb(y ~ kron(us(0 + member) %x% ar1(0 + time))),
