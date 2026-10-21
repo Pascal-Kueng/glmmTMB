@@ -115,6 +115,10 @@ test_that("kron() margins can be propto or equalto", {
   f5 <- glmmTMB(count ~ spp + propto(0 + spp:DOP | site:sample, C_sppDOP),
                 data = Salamanders, family = poisson, control = ctl)
   expect_equal(logLik(f4), logLik(f5), tolerance = tol_logLik)
+  ## a kron() term may have no estimated parameters
+  f6 <- glmmTMB(y ~ kron(equalto(0 + member, S_member) %x% equalto(0 + time, S_time) | dyad) +
+                  (1 | dyad), data = kron_data, control = ctl)
+  expect_length(getME(f6, "theta"), 1)
 })
 
 test_that("kron() margins can be rr", {

@@ -509,7 +509,8 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
       blockNumTheta <- getVal(ReStruc,"blockNumTheta")
       blockCode  <- getVal(ReStruc, "blockCode")
       thetaseq <- rep.int(seq_along(blockNumTheta), blockNumTheta)
-      tl <- split(theta, thetaseq)
+      ## factor() keeps terms without theta (e.g. kron() with equalto margins)
+      tl <- split(theta, factor(thetaseq, seq_along(blockNumTheta)))
       for(i in 1:length(blockCode)){
         cls <- names(.valid_covstruct)[match(blockCode[i], .valid_covstruct)]
         tl[[i]] <- if (cls == "kron") { # the margins' estimated theta, see getReStruc()
@@ -1033,7 +1034,8 @@ map.theta.propto <- function(ReStruc, map, component) {
   blockTheta <- getVal(ReStruc,"blockNumTheta")
   cov_code <- getVal(ReStruc, "blockCode")
   thetaseq <- rep.int(seq_along(blockTheta), blockTheta)
-  tl <- split(map.theta, thetaseq)
+  ## factor() keeps terms without theta (e.g. kron() with equalto margins)
+  tl <- split(map.theta, factor(thetaseq, seq_along(blockTheta)))
   for(i in 1:length(cov_code)){
     cls <- names(.valid_covstruct)[match(cov_code[i], .valid_covstruct)]
     tl[[i]] <- mapStrucTheta(cls, tl[[i]])
