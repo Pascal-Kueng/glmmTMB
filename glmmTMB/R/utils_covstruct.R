@@ -101,6 +101,10 @@ rewriteKron <- function(x) {
         ## Split nested groups here (g/h -> h:g and g, as for us(0 + f | g/h)):
         ## splitForm() does not split them in terms with a second argument
         groups <- reformulas::expandGrpVar(bar[[3]])
+        ## "| 1" expands to no groups, which would drop the term silently
+        if (!length(groups))
+            stop("kron() needs a grouping factor: for a single group, use a ",
+                 "factor with one level instead of | 1", call. = FALSE)
         return(reformulas::sumTerms(lapply(groups, function(g)
             call("kron", call("|", lhs, g), spec))))
     }

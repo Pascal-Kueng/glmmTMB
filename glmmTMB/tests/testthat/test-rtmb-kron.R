@@ -173,6 +173,8 @@ test_that("kron() gives clear errors", {
                "must look like")
   expect_error(fit_rtmb(y ~ kron(us(0 + member) %x% ar1(0 + time))),
                "needs a grouping factor")
+  expect_error(fit_rtmb(y ~ kron(us(0 + member) %x% ar1(0 + time) | 1)),
+               "factor with one level")
 })
 
 test_that("kron() rejects unsupported Kenward-Roger inference", {
