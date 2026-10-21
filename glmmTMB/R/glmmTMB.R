@@ -511,19 +511,9 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
       thetaseq <- rep.int(seq_along(blockNumTheta), blockNumTheta)
       tl <- split(theta, thetaseq)
       for(i in 1:length(blockCode)){
-        if(names(.valid_covstruct)[match(blockCode[i], .valid_covstruct)]=="rr") # if rr start theta at 1
-          tl[[i]] <- rep(1, blockNumTheta[i])
-        else if(names(.valid_covstruct)[match(blockCode[i], .valid_covstruct)]=="propto") { # if propto then set theta to be transformed values
-          a <- List[["aa"]][[i]]
-          tl[[i]] <- c(as.theta.vcov(a), 0) # last theta is lambda (proportional parameter)
-        } #end else if propto
-        
-        else if(names(.valid_covstruct)[match(blockCode[i], .valid_covstruct)]=="equalto") { # if equalto then get vcov values
-          a <- List[["aa"]][[i]]
-          checkEqualto(aa = a, cnms = List$reTrms$cnms[[i]])
-          tl[[i]] <- as.theta.vcov(a) 
-        } #end else if equalto
-      } #end for loop
+        cls <- names(.valid_covstruct)[match(blockCode[i], .valid_covstruct)]
+        tl[[i]] <- startTheta(cls, tl[[i]], List[["aa"]][[i]], List$reTrms$cnms[[i]])
+      }
       theta <- unlist(tl, use.names = F)
     }
     return(theta)
@@ -965,6 +955,26 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
     namedList(X, Z, reTrms, ss, aa, terms, offset, reXterms)
 }
 
+##' Starting values for theta for a single covariance structure
+#' @param cls the structure name (e.g. \code{"us"}, \code{"propto"})
+#' @param th default starting values for this structure (length = its number of parameters)
+#' @param a the evaluated additional argument (a matrix for \code{propto} and \code{equalto})
+#' @param cnms column names of the term (or kron margin), used for the \code{equalto} check
+#' @return the starting values, same length as \code{th}
+#' @noRd
+startTheta <- function(cls, th, a, cnms) {
+    res <- if (cls == "rr") {
+               rep(1, length(th))                          # rr starts at 1
+           } else if (cls == "propto") {
+               c(as.theta.vcov(a), 0)                      # last theta is lambda (proportional parameter)
+           } else if (cls == "equalto") {
+               checkEqualto(aa = a, cnms = cnms)
+               as.theta.vcov(a)
+           } else th
+    stopifnot(length(res) == length(th))
+    res
+}
+
 ##' Get theta parameterisation of a covariance structure
 ## from Balint Tamasi, TMB user's group list
 ## FIXME: names based on dimnames of Sigma?
@@ -981,6 +991,20 @@ as.theta.vcov <- function(Sigma, corrs.only=FALSE) {
   if (corrs.only) return(corrs)
   ret <- c(logsd,corrs)
   return(ret)
+}
+
+##' Fix (map to NA) the theta parameters of a structure that are not estimated
+#' @param cls the structure name
+#' @param idx the map indices for this structure's theta parameters
+#' @return \code{idx} with the fixed elements set to NA
+#' @noRd
+mapStrucTheta <- function(cls, idx) {
+  if (cls == "propto") {
+    idx[seq_len(length(idx) - 1)] <- NA        # only the last theta (lambda) is estimated
+  } else if (cls == "equalto") {
+    idx[] <- NA                                # everything fixed
+  }
+  idx
 }
 
 ##' Set map values for theta to be fixed (NA) for propto
@@ -1006,11 +1030,8 @@ map.theta.propto <- function(ReStruc, map, component) {
   thetaseq <- rep.int(seq_along(blockTheta), blockTheta)
   tl <- split(map.theta, thetaseq)
   for(i in 1:length(cov_code)){
-    if(cov_code[[i]] == 11) {
-      tl[[i]][1:(blockTheta[i] - 1)] <- rep(NA, blockTheta[i] - 1)
-    } else if(cov_code[[i]] == 15) { #for equalto
-      tl[[i]][1:(blockTheta[i])] <- rep(NA, blockTheta[i])
-    }
+    cls <- names(.valid_covstruct)[match(cov_code[i], .valid_covstruct)]
+    tl[[i]] <- mapStrucTheta(cls, tl[[i]])
   }
   map.theta <- unlist(tl, use.names = FALSE)
   if(component == "cond")
