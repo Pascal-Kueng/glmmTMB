@@ -638,14 +638,21 @@ termwise_nll <- function(U, theta, term) {
   )
 }
 
+## Index that reorders an array with dimensions dims so that dimension p comes
+## first and the other dimensions keep their order (as aperm() would)
+dim_to_front_index <- function(dims, p) {
+  as.vector(aperm(array(seq_len(prod(dims)), dims), c(p, seq_along(dims)[-p])))
+}
+
 ## termwise_nll() for a kron() term. The density of U, with covariance
 ## kronecker(margin 1, margin 2, ...), is built from the margins' own
 ## densities with RTMB::dseparable(). As in kronecker(), the last margin varies
-## fastest; the groups form an extra iid margin. theta holds only the margins'
-## estimated parameters; the fixed ones (e.g. the scale of later margins) are
-## set in getReStruc().
+## fastest. The groups form an extra iid margin. theta holds only the margins'
+## estimated parameters. The fixed ones (e.g. the scale of later margins) come
+## from getReStruc().
 kron_nll <- function(U, theta, term) {
-  ## Preserve automatic differentiation when filling in theta below
+  ## theta holds AD values while RTMB tapes the likelihood. Base R's [<- cannot
+  ## assign them into the plain numeric start values below, but RTMB's can.
   "[<-" <- RTMB::ADoverload("[<-")
   margins <- term$margins
 
@@ -666,24 +673,23 @@ kron_nll <- function(U, theta, term) {
   } else if (simulation && term$simCode == .valid_simcode[["fix"]]) {
     U[] <- U$getOrig(seq_along(U))
   } else {
-    ## Fitting, or simulating new values (simCode "random"). dseparable()'s
-    ## first density acts on the first (fastest) dimension of b, which is the
-    ## last margin: hence rev(). The groups come last (iid). New values are
-    ## drawn into a new simref: U can be assigned only once, after the rr
-    ## margins below
+    ## Fitting, or simulating new values (simCode "random"). dseparable()
+    ## applies its first density to the first (fastest) dimension of b, which
+    ## is the last margin, hence rev(). The groups come last (iid). New values
+    ## go into a new simref first, because U can be assigned only once and the
+    ## rr margins below still change them.
     b <- if (simulation) RTMB::simref(length(U)) else U
     dim(b) <- c(rev(vapply(margins, `[[`, 0, "blockSize")), term$blockReps)
     iid_logdens <- function(x) sum(RTMB::dnorm(x, log = TRUE))
     nll <- -do.call(RTMB::dseparable, c(rev(margin_logdens), iid_logdens))(b)
     if (simulation) b <- b$value
-    ## dseparable() used each rr margin's iid latent variables: multiply them
+    ## For an rr margin, dseparable() used iid latent variables. Multiply them
     ## by the loadings with termwise_nll(), which works along the first
-    ## dimension, after permuting b to put the margin's dimension first (as in
-    ## glmmTMB#1353)
+    ## dimension, so reorder b to bring the margin's dimension first (as in
+    ## glmmTMB#1353).
     for (k in which(vapply(margins, `[[`, "", "blockName") == "rr")) {
       p <- length(margins) + 1 - k # margin k's dimension in b
-      idx <- as.vector(aperm(array(seq_along(b), dim(b)),
-                             c(p, seq_along(dim(b))[-p])))
+      idx <- dim_to_front_index(dim(b), p)
       margin <- margins[[k]]
       margin$blockReps <- length(b) / margin$blockSize
       b[idx] <- termwise_nll(b[idx], margin_theta[[k]], margin)$u
@@ -691,8 +697,8 @@ kron_nll <- function(U, theta, term) {
     if (simulation) U[] <- b else U <- b
   }
 
-  ## Report each margin like a term of its own; only its corr and sd are
-  ## used, so a block of zeros stands in for U
+  ## Report each margin like a term of its own. Only its corr and sd are
+  ## used, so a block of zeros stands in for U.
   margin_report <- Map(function(th, margin) {
     termwise_nll(numeric(margin$blockSize), th, margin)
   }, margin_theta, margins)

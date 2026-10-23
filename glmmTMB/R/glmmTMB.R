@@ -878,10 +878,10 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
         }
         aa <- lapply(ss$reTrmAddArgs, get_arg)
 
-        ## kron() terms: replace the Z that mkReTrms() built from the first
-        ## argument by the row-wise Kronecker (Khatri-Rao) product of the
-        ## grouping indicators and the margins' model matrices, with the last
-        ## margin varying fastest, as in kronecker()
+        ## kron() terms: mkReTrms() built Z from the placeholder first
+        ## argument. Replace it by the row-wise Kronecker (Khatri-Rao) product
+        ## of the grouping indicators and the margins' model matrices. As in
+        ## kronecker(), the last margin varies fastest.
         for (i in which(ss$reTrmClasses == "kron")) {
             Xt <- lapply(aa[[i]], function(m)
                 t(model.matrix(as.formula(call("~", m$lhs)), fr)))
@@ -1207,12 +1207,12 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
                                       aa = lapply(margin_specs, `[[`, "arg"),
                                       reXterms = margin_reXterms, fr = fr,
                                       full_cor = rep(full_cor[i], n_margins))
-            ## each margin stores its start values ("theta") and which of them
-            ## are estimated ("free"); the others stay fixed at their start
-            ## values: those set by a propto or equalto matrix, and the scale of
-            ## later margins (first log-SD 0, i.e. SD 1; rr's first loading 1;
-            ## propto's log-lambda 0). The first margin with a free scale
-            ## carries the variance.
+            ## Each margin stores its start values (theta) and which of them
+            ## are estimated (free). The others stay at their start values:
+            ## those set by a propto or equalto matrix, and the scale of each
+            ## later margin, which is its first log-SD (0, so SD 1), rr's first
+            ## loading (1) or propto's log-lambda (0). The first margin with a
+            ## free scale carries the variance.
             has_scale <- FALSE
             for (k in seq_len(n_margins)) {
                 m <- tmp$margins[[k]]
@@ -1528,8 +1528,8 @@ glmmTMB <- function(
     environment(dispformula) <- environment(formula)
     call$dispformula <- dispformula
 
-    ## rewrite kron() terms into the internal form; the stored call keeps the
-    ## user's syntax
+    ## rewrite kron() terms into the internal form (the stored call keeps the
+    ## user's syntax)
     formula <- rewriteKron(formula)
     ziformula <- rewriteKron(ziformula)
     dispformula <- rewriteKron(dispformula)

@@ -239,8 +239,8 @@ VarCorr.glmmTMB <- function(x, sigma = 1, ... )
         sd <- xrep[[paste0("sd", comp_nms[i])]]
         ## show each kron() margin as a term of its own: replace the kron term's
         ## entry by one entry per margin (kron_nll() reports corr and sd per
-        ## margin); loop backwards so the insertions don't shift entries not
-        ## yet visited
+        ## margin). Loop backwards, so the insertions don't shift entries not
+        ## yet visited.
         for (j in rev(seq_along(restruc))) {
             margins <- restruc[[j]]$margins
             if (is.null(margins)) next

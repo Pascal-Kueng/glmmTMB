@@ -71,6 +71,19 @@ parseNumLevels <- function(levels) {
     ans
 }
 
+## How a kron() term is fitted. Each margin starts as a spec (a list), and
+## four functions handle it in turn:
+## 1. rewriteKron(), below, makes the spec from the formula: struc (e.g.
+##    "us"), lhs (e.g. 1 + x) and arg (e.g. propto's matrix, or NA).
+## 2. getXReTrms() adds cnms (the margin's column names) and builds the
+##    term's Z as the Khatri-Rao product of the margins' model matrices.
+## 3. getReStruc() turns each spec into a covariance term by calling itself,
+##    and adds theta (start values) and free (which of them are estimated).
+##    Later margins get their scale fixed here.
+## 4. kron_nll() fills the estimated values into each margin's theta, then
+##    combines the margins' densities with RTMB::dseparable() and applies
+##    any rr loadings.
+
 ## Rewrite each kron(A(lhs1) %x% B(lhs2, arg) | g) in a formula into the
 ## internal form
 ##   kron(lhs1 + lhs2 | g, list(list(struc = "A", lhs = quote(lhs1), arg = NA),
@@ -99,9 +112,11 @@ rewriteKron <- function(x) {
             stop("kron() margins take no grouping bar: use one outer bar, as in ",
                  "kron(us(0 + f1) %x% ar1(0 + f2) | g)", call. = FALSE)
         lhs <- Reduce(function(a, b) call("+", a, b), lapply(margins, `[[`, 2))
-        spec <- as.call(c(quote(list), lapply(margins, function(e)
+        ## A(lhs, arg)  ->  list(struc = "A", lhs = quote(lhs), arg = arg)
+        marginSpec <- function(e)
             call("list", struc = deparse(e[[1]]), lhs = call("quote", e[[2]]),
-                 arg = if (length(e) == 3) e[[3]] else NA))))
+                 arg = if (length(e) == 3) e[[3]] else NA)
+        spec <- as.call(c(quote(list), lapply(margins, marginSpec)))
         ## Split nested groups here (g/h -> h:g and g, as for us(0 + f | g/h)):
         ## splitForm() does not split them in terms with a second argument
         groups <- reformulas::expandGrpVar(bar[[3]])

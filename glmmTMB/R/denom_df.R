@@ -131,7 +131,7 @@ dof_KR <- function(model) {
 .vcov_kenward_adjusted <- function(model) {
     re <- model$modelInfo$reStruc$condReStruc
     block_codes <- vapply(re, `[[`, 0, "blockCode")
-    ## .get_SigmaG() expects one VarCorr() block per term; kron() gives one per margin
+    ## .get_SigmaG() expects one VarCorr() block per term, but kron() gives one per margin
     if (.valid_covstruct[["kron"]] %in% block_codes) {
         stop("Kenward-Roger adjustments are not supported for models with a ",
              "conditional kron() term", call. = FALSE)
