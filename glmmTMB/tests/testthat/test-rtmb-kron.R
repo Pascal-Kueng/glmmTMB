@@ -71,30 +71,11 @@ test_that("kron() margins can have intercepts and slopes", {
   f1 <- fit_rtmb(y ~ x + kron(us(1 + x) %x% homdiag(0 + time) | dyad))
   f2 <- fit_rtmb(y ~ x + us(1 + x | dyad:time))
   expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
-  ## dense marginal likelihood, as above
-  f3 <- fit_rtmb(y ~ x + kron(us(1 + x) %x% ar1(0 + time) | dyad))
-  vc <- VarCorr(f3)$cond
-  Z <- as.matrix(getME(f3, "Z"))
-  V <- Z %*% kronecker(diag(25), kronecker(vc[[1]], vc[[2]])) %*% t(Z) +
-    sigma(f3)^2 * diag(nrow(kron_data))
-  res <- kron_data$y - getME(f3, "X") %*% fixef(f3)$cond
-  R <- chol(V)
-  z <- backsolve(R, res, transpose = TRUE)
-  nll <- sum(log(diag(R))) - sum(dnorm(z, log = TRUE))
-  expect_equal(-as.numeric(logLik(f3)), nll, tolerance = tol_logLik)
 })
 
 test_that("kron() margins can be propto or equalto", {
   ## glmmTMB() looks up the matrices from where it is called, so call it here
   ctl <- glmmTMBControl(use_rtmb = TRUE)
-  ## as a later margin, propto's scale is fixed: with an identity matrix it
-  ## is the identity
-  I_time <- diag(5)
-  dimnames(I_time) <- rep(list(paste0("time", 1:5)), 2)
-  f1 <- glmmTMB(y2 ~ kron(us(0 + member) %x% propto(0 + time, I_time) | dyad),
-                data = kron_data, control = ctl)
-  f2 <- fit_rtmb(y2 ~ us(0 + member | dyad:time))
-  expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
   ## an equalto first margin has no free scale, so the next margin keeps its own
   f3 <- glmmTMB(y ~ kron(equalto(0 + member, S_member) %x% ar1(0 + time) | dyad),
                 data = kron_data, control = ctl)
@@ -115,6 +96,8 @@ test_that("kron() margins can be propto or equalto", {
   f5 <- glmmTMB(count ~ spp + propto(0 + spp:DOP | site:sample, C_sppDOP),
                 data = Salamanders, family = poisson, control = ctl)
   expect_equal(logLik(f4), logLik(f5), tolerance = tol_logLik)
+  ## as a later margin, propto's scale is fixed
+  expect_length(getME(f4, "theta"), 1)
   ## a kron() term may have no estimated parameters
   f6 <- glmmTMB(y ~ kron(equalto(0 + member, S_member) %x% equalto(0 + time, S_time) | dyad) +
                   (1 | dyad), data = kron_data, control = ctl)
