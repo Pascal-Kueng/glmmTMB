@@ -1224,10 +1224,8 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
                                       margin_specs[[k]]$arg, tmp$cnms[[k]])
                 m$free <- !is.na(mapStrucTheta(struc, seq_len(m$blockNumTheta)))
                 scale <- if (struc == "propto") m$blockNumTheta else 1
-                if (m$free[scale]) {
-                    m$free[scale] <- !has_scale
-                    has_scale <- TRUE
-                }
+                if (has_scale) m$free[scale] <- FALSE
+                has_scale <- has_scale || m$free[scale]
                 tmp$margins[[k]] <- m
             }
             tmp$blockNumTheta <- sum(unlist(lapply(tmp$margins, `[[`, "free")))
