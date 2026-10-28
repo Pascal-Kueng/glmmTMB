@@ -166,10 +166,6 @@ predict.glmmTMB <- function(object,
     if (!se.fit) message("se.fit set to TRUE because cov.fit = TRUE")
     se.fit <- TRUE
   }
-  ## rebuild the TMB object with the back-end (C++ or RTMB) used for fitting
-  old_use_rtmb <- useRTMB()
-  useRTMB(!is.null(environment(object$obj$fn)$rtmb_data_env))
-  on.exit(useRTMB(old_use_rtmb), add = TRUE)
 
   if(is.null(aggregate)) {
     aggregate <- factor()
@@ -512,6 +508,10 @@ predict.glmmTMB <- function(object,
     }
     on.exit(do.call(openmp, n_orig), add = TRUE)
 
+    ## rebuild the TMB object with the back-end (C++ or RTMB) used for fitting
+    old_use_rtmb <- useRTMB()
+    useRTMB(!is.null(environment(object$obj$fn)$rtmb_data_env))
+    on.exit(useRTMB(old_use_rtmb), add = TRUE)
     newObj <- with(TMBStruc,
                    MakeADFun(data.tmb,
                              parameters,
