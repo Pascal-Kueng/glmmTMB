@@ -259,9 +259,10 @@ ranef.glmmTMB <- function(object, condVar=TRUE, ...) {
 
   pl <- getParList(object)  ## see VarCorr.R
 
+  ## include the margins of kron() terms, which can be rr
   all_blockcodes <- unlist(lapply(object$modelInfo$reStruc,
-                                function(x) vapply(x, function(y) y[["blockCode"]],
-                                                   numeric(1))))
+                                function(x) lapply(x, function(y)
+                                    c(y[["blockCode"]], vapply(y$margins, `[[`, 0, "blockCode")))))
   has_rr <- any(all_blockcodes == .valid_covstruct[["rr"]])
   ## FIXME: test what happens if condVar is FALSE and/or we run this on a model without RE?
   ## FIXME: could probably simplify/collapse further.

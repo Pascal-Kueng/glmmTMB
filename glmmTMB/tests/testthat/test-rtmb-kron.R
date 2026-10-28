@@ -105,6 +105,10 @@ test_that("kron() margins can be rr", {
   f1 <- fit_rtmb(y ~ kron(rr(0 + member, 1) %x% homdiag(0 + time) | dyad))
   f2 <- fit_rtmb(y ~ rr(0 + member | dyad:time, 1))
   expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
+  ## ranef() applies the loadings, as for rr(). The two fits arrange the
+  ## values differently, so compare them sorted.
+  expect_equal(sort(unname(unlist(ranef(f1)$cond))),
+               sort(unname(unlist(ranef(f2)$cond))), tolerance = 1e-4)
 })
 
 test_that("kron() works next to other terms", {
