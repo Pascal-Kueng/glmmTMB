@@ -74,34 +74,31 @@ test_that("kron() margins can have intercepts and slopes", {
 })
 
 test_that("kron() margins can be propto or equalto", {
-  ## glmmTMB() looks up the matrices from where it is called, so call it here
-  ctl <- glmmTMBControl(use_rtmb = TRUE)
   ## an equalto first margin has no free scale, so the next margin keeps its own
-  f3 <- glmmTMB(y ~ kron(equalto(0 + member, S_member) %x% ar1(0 + time) | dyad),
-                data = kron_data, control = ctl)
-  expect_equal(c(VarCorr(f3)$cond[[1]]), c(S_member))
-  expect_length(getME(f3, "theta"), 2)
+  f1 <- fit_rtmb(y ~ kron(equalto(0 + member, S_member) %x% ar1(0 + time) | dyad))
+  expect_equal(c(VarCorr(f1)$cond[[1]]), c(S_member))
+  expect_length(getME(f1, "theta"), 2)
+  ## a kron() term may have no estimated parameters, also when a term follows it
+  f2 <- fit_rtmb(y ~ kron(equalto(0 + member, S_member) %x% equalto(0 + time, S_time) | dyad) +
+                   (1 | dyad))
+  expect_length(getME(f2, "theta"), 1)
   ## from glmmTMB#1353: diag(0 + DOP) is a 1 x 1 slope margin, so this is
   ## propto(0 + spp:DOP | site:sample, C)
   data("Salamanders", package = "glmmTMB")
-  namedC <- function(nm) {
-    C <- 0.5^abs(outer(seq_along(nm), seq_along(nm), "-"))
-    dimnames(C) <- list(nm, nm)
-    C
-  }
-  C_spp <- namedC(levels(Salamanders$spp))
-  C_sppDOP <- namedC(colnames(model.matrix(~ 0 + spp:DOP, Salamanders)))
-  f4 <- glmmTMB(count ~ spp + kron(diag(0 + DOP) %x% propto(0 + spp, C_spp) | site:sample),
+  lev <- levels(Salamanders$spp)
+  C_spp <- 0.5^abs(outer(seq_along(lev), seq_along(lev), "-"))
+  dimnames(C_spp) <- list(lev, lev)
+  C_sppDOP <- C_spp
+  dimnames(C_sppDOP) <- rep(list(paste0("spp", lev, ":DOP")), 2)
+  ## glmmTMB() looks up the matrices from where it is called, so call it here
+  ctl <- glmmTMBControl(use_rtmb = TRUE)
+  f3 <- glmmTMB(count ~ spp + kron(diag(0 + DOP) %x% propto(0 + spp, C_spp) | site:sample),
                 data = Salamanders, family = poisson, control = ctl)
-  f5 <- glmmTMB(count ~ spp + propto(0 + spp:DOP | site:sample, C_sppDOP),
+  f4 <- glmmTMB(count ~ spp + propto(0 + spp:DOP | site:sample, C_sppDOP),
                 data = Salamanders, family = poisson, control = ctl)
-  expect_equal(logLik(f4), logLik(f5), tolerance = tol_logLik)
+  expect_equal(logLik(f3), logLik(f4), tolerance = tol_logLik)
   ## as a later margin, propto's scale is fixed
-  expect_length(getME(f4, "theta"), 1)
-  ## a kron() term may have no estimated parameters
-  f6 <- glmmTMB(y ~ kron(equalto(0 + member, S_member) %x% equalto(0 + time, S_time) | dyad) +
-                  (1 | dyad), data = kron_data, control = ctl)
-  expect_length(getME(f6, "theta"), 1)
+  expect_length(getME(f3, "theta"), 1)
 })
 
 test_that("kron() margins can be rr", {
