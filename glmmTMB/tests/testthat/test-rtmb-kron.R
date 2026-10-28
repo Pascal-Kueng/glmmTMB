@@ -7,10 +7,13 @@ skip_if_not_installed("RTMB")
 tol_logLik <- 1e-6
 
 set.seed(6001)
+## two observations per member, time and dyad, so that the random effects are
+## not confounded with the residual
 kron_data <- expand.grid(
   member = factor(1:2),
   time = factor(1:5),
-  dyad = factor(1:25)
+  dyad = factor(1:25),
+  obs = 1:2
 )
 S_member <- matrix(c(1, 0.5, 0.5, 1.5), 2)
 S_time <- 0.6^abs(outer(1:5, 1:5, "-"))
@@ -18,10 +21,7 @@ S_time <- 0.6^abs(outer(1:5, 1:5, "-"))
 L <- t(chol(kronecker(S_time, S_member)))
 b <- as.vector(L %*% matrix(rnorm(10 * 25), 10))
 kron_data$x <- rnorm(nrow(kron_data))
-kron_data$y <- 1 + 0.5 * kron_data$x + b + rnorm(nrow(kron_data), sd = 0.5)
-## y2: member correlation only, no time correlation
-kron_data$y2 <- as.vector(t(chol(S_member)) %*% matrix(rnorm(250), 2)) +
-  rnorm(nrow(kron_data), sd = 0.5)
+kron_data$y <- 1 + 0.5 * kron_data$x + rep(b, 2) + rnorm(nrow(kron_data), sd = 0.5)
 
 fit_rtmb <- function(formula, data = kron_data) {
   glmmTMB(formula, data = data, control = glmmTMBControl(use_rtmb = TRUE))
@@ -31,8 +31,8 @@ m_kron <- fit_rtmb(y ~ x + kron(us(0 + member) %x% ar1(0 + time) | dyad))
 
 test_that("kron() matches an equivalent ordinary structure", {
   ## homdiag() as a later margin is the identity (its SD is fixed at 1)
-  f1 <- fit_rtmb(y2 ~ kron(us(0 + member) %x% homdiag(0 + time) | dyad))
-  f2 <- fit_rtmb(y2 ~ us(0 + member | dyad:time))
+  f1 <- fit_rtmb(y ~ kron(us(0 + member) %x% homdiag(0 + time) | dyad))
+  f2 <- fit_rtmb(y ~ us(0 + member | dyad:time))
   expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
   expect_equal(unname(getME(f1, "theta")), unname(getME(f2, "theta")),
                tolerance = 1e-4)
@@ -105,8 +105,8 @@ test_that("kron() margins can be propto or equalto", {
 })
 
 test_that("kron() margins can be rr", {
-  f1 <- fit_rtmb(y2 ~ kron(rr(0 + member, 1) %x% homdiag(0 + time) | dyad))
-  f2 <- fit_rtmb(y2 ~ rr(0 + member | dyad:time, 1))
+  f1 <- fit_rtmb(y ~ kron(rr(0 + member, 1) %x% homdiag(0 + time) | dyad))
+  f2 <- fit_rtmb(y ~ rr(0 + member | dyad:time, 1))
   expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
 })
 
