@@ -91,44 +91,45 @@ parseNumLevels <- function(levels) {
 ## parsed like rr(0 + f | g, 2). The first argument only puts the margins'
 ## variables into the model frame: getXReTrms() builds Z from the margins.
 rewriteKron <- function(x) {
-    ## Rewrite only the one-argument user syntax, not the internal form
-    if (identical(x[[1]], quote(kron)) && length(x) == 2) {
-        ## A(lhs1) %x% B(lhs2, arg) %x% ...  ->  list(A(lhs1), B(lhs2, arg), ...)
-        flatten <- function(e) {
-            if (!is.call(e) || !identical(e[[1]], quote(`%x%`))) return(list(e))
-            c(flatten(e[[2]]), flatten(e[[3]]))
-        }
-        bar <- x[[2]] # A(lhs1) %x% B(lhs2, arg) | g
-        ## Require "| g" (a "|| g" is read as "| g", as for other structures)
-        if (!is.call(bar) || !deparse1(bar[[1]]) %in% c("|", "||"))
-            stop("kron() needs a grouping factor, as in ",
-                 "kron(us(0 + f1) %x% ar1(0 + f2) | g)", call. = FALSE)
-        margins <- flatten(bar[[2]])
-        if (!all(vapply(margins, function(e) is.call(e) && length(e) %in% 2:3, NA)))
-            stop("kron() margins must look like us(1 + x) or propto(0 + f, C)",
-                 call. = FALSE)
-        has_bar <- function(e) any(c("|", "||") %in% all.names(e[[2]]))
-        if (any(vapply(margins, has_bar, NA)))
-            stop("kron() margins take no grouping bar: use one outer bar, as in ",
-                 "kron(us(0 + f1) %x% ar1(0 + f2) | g)", call. = FALSE)
-        lhs <- Reduce(function(a, b) call("+", a, b), lapply(margins, `[[`, 2))
-        ## A(lhs, arg)  ->  list(struc = "A", lhs = quote(lhs), arg = arg)
-        marginSpec <- function(e)
-            call("list", struc = deparse(e[[1]]), lhs = call("quote", e[[2]]),
-                 arg = if (length(e) == 3) e[[3]] else NA)
-        spec <- as.call(c(quote(list), lapply(margins, marginSpec)))
-        ## Split nested groups here (g/h -> h:g and g, as for us(0 + f | g/h)):
-        ## splitForm() does not split them in terms with a second argument
-        groups <- reformulas::expandGrpVar(bar[[3]])
-        ## "| 1" expands to no groups, which would drop the term silently
-        if (!length(groups))
-            stop("kron() needs a grouping factor: for a single group, use a ",
-                 "factor with one level instead of | 1", call. = FALSE)
-        return(reformulas::sumTerms(lapply(groups, function(g)
-            call("kron", call("|", lhs, g), spec))))
+    ## Rewrite only the one-argument user syntax, not the internal form (as
+    ## returned by formula(fit, component = "cond")). Otherwise, look for
+    ## kron() terms in the arguments.
+    if (!identical(x[[1]], quote(kron)) || length(x) != 2) {
+        for (i in seq_along(x)[-1]) if (is.call(x[[i]])) x[[i]] <- rewriteKron(x[[i]])
+        return(x)
     }
-    ## Otherwise, look for kron() terms in the arguments
-    for (i in seq_along(x)[-1]) if (is.call(x[[i]])) x[[i]] <- rewriteKron(x[[i]])
-    x
+    bar <- x[[2]] # A(lhs1) %x% B(lhs2, arg) | g
+    ## Require "| g" (a "|| g" is read as "| g", as for other structures)
+    if (!is.call(bar) || !deparse1(bar[[1]]) %in% c("|", "||"))
+        stop("kron() needs a grouping factor, as in ",
+             "kron(us(0 + f1) %x% ar1(0 + f2) | g)", call. = FALSE)
+    ## A(lhs1) %x% B(lhs2, arg) %x% ...  ->  list(A(lhs1), B(lhs2, arg), ...)
+    flatten <- function(e) {
+        if (!is.call(e) || !identical(e[[1]], quote(`%x%`))) return(list(e))
+        c(flatten(e[[2]]), flatten(e[[3]]))
+    }
+    margins <- flatten(bar[[2]])
+    if (!all(vapply(margins, function(e) is.call(e) && length(e) %in% 2:3, NA)))
+        stop("kron() margins must look like us(1 + x) or propto(0 + f, C)",
+             call. = FALSE)
+    has_bar <- function(e) any(c("|", "||") %in% all.names(e[[2]]))
+    if (any(vapply(margins, has_bar, NA)))
+        stop("kron() margins take no grouping bar: use one outer bar, as in ",
+             "kron(us(0 + f1) %x% ar1(0 + f2) | g)", call. = FALSE)
+    lhs <- Reduce(function(a, b) call("+", a, b), lapply(margins, `[[`, 2))
+    ## A(lhs, arg)  ->  list(struc = "A", lhs = quote(lhs), arg = arg)
+    marginSpec <- function(e)
+        call("list", struc = deparse(e[[1]]), lhs = call("quote", e[[2]]),
+             arg = if (length(e) == 3) e[[3]] else NA)
+    spec <- as.call(c(quote(list), lapply(margins, marginSpec)))
+    ## Split nested groups here (g/h -> h:g and g, as for us(0 + f | g/h)):
+    ## splitForm() does not split them in terms with a second argument
+    groups <- reformulas::expandGrpVar(bar[[3]])
+    ## "| 1" expands to no groups, which would drop the term silently
+    if (!length(groups))
+        stop("kron() needs a grouping factor: for a single group, use a ",
+             "factor with one level instead of | 1", call. = FALSE)
+    reformulas::sumTerms(lapply(groups, function(g)
+        call("kron", call("|", lhs, g), spec)))
 }
 
