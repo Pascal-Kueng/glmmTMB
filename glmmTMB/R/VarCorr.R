@@ -207,8 +207,8 @@ mkVC <- function(cor, sd, cnms, sc, bc, useSc, fullCor = NULL) {
 ##' for further details).
 ##'
 ##' For a \code{kron()} term, each margin is returned as a block of its own,
-##' labelled e.g. \code{"subject (kron 1/2)"} and \code{"subject (kron 2/2)"};
-##' the covariance of the whole term is the \code{kronecker()} product of these blocks.
+##' labelled e.g. \code{"subject (kron 1/2)"} and \code{"subject (kron 2/2)"}.
+##' The covariance of the whole term is the \code{kronecker()} product of these blocks, in order.
 ##' @keywords internal
 VarCorr.glmmTMB <- function(x, sigma = 1, ... )
 {
@@ -237,17 +237,17 @@ VarCorr.glmmTMB <- function(x, sigma = 1, ... )
         cn <- reT[[comp_nms2[i]]]$cnms
         cor <- xrep[[paste0("corr", comp_nms[i])]]
         sd <- xrep[[paste0("sd", comp_nms[i])]]
-        ## show each kron() margin as a term of its own: replace the kron term's
-        ## entry by one entry per margin (kron_nll() reports corr and sd per
-        ## margin). Loop backwards, so the insertions don't shift entries not
-        ## yet visited.
+        ## show each kron() margin as a block of its own: replace the kron
+        ## term's entry by one entry per margin (kron_nll() reports corr and
+        ## sd per margin). Loop backwards, so the insertions don't shift
+        ## entries not yet visited.
         for (j in rev(seq_along(restruc))) {
             margins <- restruc[[j]]$margins
             if (is.null(margins)) next
             replace_term <- function(x, per_margin)
                 append(x[-j], per_margin, after = j - 1)
             ## label the margins as parts of one term, e.g. "dyad (kron 1/2)",
-            ## so they don't look like separate (added) terms
+            ## so they don't look like separate terms
             grpvar <- sprintf("%s (kron %d/%d)", names(cn)[j],
                               seq_along(margins), length(margins))
             cn <- replace_term(cn, setNames(restruc[[j]]$cnms, grpvar))

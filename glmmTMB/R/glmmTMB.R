@@ -509,7 +509,7 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
       blockNumTheta <- getVal(ReStruc,"blockNumTheta")
       blockCode  <- getVal(ReStruc, "blockCode")
       thetaseq <- rep.int(seq_along(blockNumTheta), blockNumTheta)
-      ## factor() keeps terms without theta (e.g. kron() with equalto margins)
+      ## factor() keeps terms without theta (e.g. kron() with only equalto margins)
       tl <- split(theta, factor(thetaseq, seq_along(blockNumTheta)))
       for(i in 1:length(blockCode)){
         cls <- names(.valid_covstruct)[match(blockCode[i], .valid_covstruct)]
@@ -1034,7 +1034,7 @@ map.theta.propto <- function(ReStruc, map, component) {
   blockTheta <- getVal(ReStruc,"blockNumTheta")
   cov_code <- getVal(ReStruc, "blockCode")
   thetaseq <- rep.int(seq_along(blockTheta), blockTheta)
-  ## factor() keeps terms without theta (e.g. kron() with equalto margins)
+  ## factor() keeps terms without theta (e.g. kron() with only equalto margins)
   tl <- split(map.theta, factor(thetaseq, seq_along(blockTheta)))
   for(i in 1:length(cov_code)){
     cls <- names(.valid_covstruct)[match(cov_code[i], .valid_covstruct)]

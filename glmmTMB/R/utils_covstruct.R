@@ -76,7 +76,8 @@ parseNumLevels <- function(levels) {
 ## 1. rewriteKron(), below, makes the spec from the formula: struc (e.g.
 ##    "us"), lhs (e.g. 1 + x) and arg (e.g. propto's matrix, or NA).
 ## 2. getXReTrms() adds cnms (the margin's column names) and builds the
-##    term's Z as the Khatri-Rao product of the margins' model matrices.
+##    term's Z as the Khatri-Rao product of the grouping indicators and the
+##    margins' model matrices.
 ## 3. getReStruc() turns each spec into a covariance term by calling itself,
 ##    and adds theta (start values) and free (which of them are estimated).
 ##    Later margins get their scale fixed here.
