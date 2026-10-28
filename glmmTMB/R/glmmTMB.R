@@ -1210,9 +1210,9 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL, reXterms=NULL, fr=NULL, full_co
             ## Each margin stores its start values (theta) and which of them
             ## are estimated (free). The others stay at their start values:
             ## those set by a propto or equalto matrix, and the scale of each
-            ## later margin, which is its first log-SD (0, so SD 1), rr's first
-            ## loading (1) or propto's log-lambda (0). The first margin with a
-            ## free scale carries the variance.
+            ## margin after the first one with a free scale (that one carries
+            ## the variance). The scale is the first log-SD (0, so SD 1), rr's
+            ## first loading (1) or propto's log-lambda (0).
             has_scale <- FALSE
             for (k in seq_len(n_margins)) {
                 m <- tmp$margins[[k]]
@@ -1343,7 +1343,7 @@ binomialType <- function(x) {
 ##' \item \code{homdiag} (diagonal, homogeneous variance)
 ##' \item \code{propto} (* proportional to user-specified variance-covariance matrix)
 ##' \item \code{equalto} (* equal to user-specified variance-covariance matrix)
-##' \item \code{kron} (* Kronecker product of two or more of the structures above (its margins), e.g. \code{kron(us(0 + trait) \%x\% ar1(0 + time) | subject)} or \code{kron(us(1 + x) \%x\% propto(0 + species, C) | g)}; RTMB back-end only. The first margin sets the overall scale; later margins have their scale fixed, e.g. their first standard deviation at 1)
+##' \item \code{kron} (* Kronecker product of two or more of the structures above, called margins, e.g. \code{kron(us(0 + trait) \%x\% ar1(0 + time) | subject)} or \code{kron(us(1 + x) \%x\% propto(0 + species, C) | g)}. RTMB back-end only. The first margin sets the overall scale (the next one if the first is \code{equalto}). Later margins have their scale fixed, e.g. their first standard deviation at 1)
 ##' }
 ##' Structures marked with * are experimental/untested. See \code{vignette("covstruct", package = "glmmTMB")} for more information.
 ##' \item For backward compatibility, the \code{family} argument can also be specified as a list comprising the name of the distribution and the link function (e.g. \code{list(family="binomial", link="logit")}). However, \strong{this alternative is now deprecated}; it produces a warning and will be removed at some point in the future. Furthermore, certain capabilities such as Pearson residuals or predictions on the data scale will only be possible if components such as \code{variance} and \code{linkfun} are present, see \code{\link{family}}.
