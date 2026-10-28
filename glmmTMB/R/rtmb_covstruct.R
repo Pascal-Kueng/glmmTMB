@@ -662,9 +662,6 @@ kron_nll <- function(U, theta, term) {
   margin_theta[unlist(lapply(margins, `[[`, "free"))] <- theta
   margin_theta <- split(margin_theta, rep(seq_along(margins),
                                           vapply(margins, `[[`, 0, "blockNumTheta")))
-  margin_logdens <- Map(function(th, margin) {
-    function(x) -termwise_nll(x, th, margin)$nll
-  }, margin_theta, margins)
 
   simulation <- inherits(U, "simref")
   nll <- 0
@@ -680,6 +677,9 @@ kron_nll <- function(U, theta, term) {
     ## rr margins below still change them.
     b <- if (simulation) RTMB::simref(length(U)) else U
     dim(b) <- c(rev(vapply(margins, `[[`, 0, "blockSize")), term$blockReps)
+    margin_logdens <- Map(function(th, margin) {
+      function(x) -termwise_nll(x, th, margin)$nll
+    }, margin_theta, margins)
     iid_logdens <- function(x) sum(RTMB::dnorm(x, log = TRUE))
     nll <- -do.call(RTMB::dseparable, c(rev(margin_logdens), iid_logdens))(b)
     if (simulation) b <- b$value
