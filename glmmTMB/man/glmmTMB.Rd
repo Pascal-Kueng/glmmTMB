@@ -99,7 +99,7 @@ Fit a generalized linear mixed model (GLMM) using Template Model Builder (TMB).
 \item \code{homdiag} (diagonal, homogeneous variance)
 \item \code{propto} (* proportional to user-specified variance-covariance matrix)
 \item \code{equalto} (* equal to user-specified variance-covariance matrix)
-\item \code{kron} (* Kronecker product of two or more of the structures above, called margins, e.g. \code{kron(us(0 + trait) \%x\% ar1(0 + time) | subject)} or \code{kron(us(1 + x) \%x\% propto(0 + species, C) | g)}. RTMB back-end only. The first margin sets the overall scale (the next one if the first is \code{equalto}). Later margins have their scale fixed, e.g. their first standard deviation at 1)
+\item \code{kron} (* Kronecker product of two or more structures, called margins, e.g. \code{kron(us(0 + trait) \%x\% ar1(0 + time) | subject)}. RTMB back-end only)
 }
 Structures marked with * are experimental/untested. See \code{vignette("covstruct", package = "glmmTMB")} for more information.
 \item For backward compatibility, the \code{family} argument can also be specified as a list comprising the name of the distribution and the link function (e.g. \code{list(family="binomial", link="logit")}). However, \strong{this alternative is now deprecated}; it produces a warning and will be removed at some point in the future. Furthermore, certain capabilities such as Pearson residuals or predictions on the data scale will only be possible if components such as \code{variance} and \code{linkfun} are present, see \code{\link{family}}.
