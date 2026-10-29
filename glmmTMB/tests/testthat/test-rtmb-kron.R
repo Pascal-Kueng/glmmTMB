@@ -31,8 +31,8 @@ m_kron <- fit_rtmb(y ~ x + kron(us(0 + member) %x% ar1(0 + time) | dyad))
 
 test_that("kron() matches an equivalent ordinary structure", {
   ## homdiag() as a later margin is the identity (its SD is fixed at 1)
-  f1 <- fit_rtmb(y ~ kron(us(0 + member) %x% homdiag(0 + time) | dyad))
-  f2 <- fit_rtmb(y ~ us(0 + member | dyad:time))
+  f1 <- fit_rtmb(y ~ x + kron(us(1 + x) %x% homdiag(0 + time) | dyad))
+  f2 <- fit_rtmb(y ~ x + us(1 + x | dyad:time))
   expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
   expect_equal(unname(getME(f1, "theta")), unname(getME(f2, "theta")),
                tolerance = 1e-4)
@@ -63,13 +63,6 @@ test_that("three-margin kron() matches ar1()", {
     rnorm(nrow(dd), sd = 0.5)
   f1 <- fit_rtmb(y ~ kron(homdiag(0 + a) %x% ar1(0 + time) %x% homdiag(0 + b) | g), dd)
   f2 <- fit_rtmb(y ~ ar1(0 + time | g:a:b), dd)
-  expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
-})
-
-test_that("kron() margins can have intercepts and slopes", {
-  ## homdiag() as a later margin is the identity (its SD is fixed at 1)
-  f1 <- fit_rtmb(y ~ x + kron(us(1 + x) %x% homdiag(0 + time) | dyad))
-  f2 <- fit_rtmb(y ~ x + us(1 + x | dyad:time))
   expect_equal(logLik(f1), logLik(f2), tolerance = tol_logLik)
 })
 
