@@ -83,7 +83,7 @@ ctab <- read.delim(sep = "#", comment = "",
  Reduced-rank                     # `rr`          #  $nd-d(d-1)/2$  # rank (d)    # Factor loading matrix (see [Reduced-rank])
  Proportional                       # `propto`      #  $1$            # Variance-covariance matrix # log(proportionality constant)
  Equal                            # `equalto`     #  $0$            # Variance-covariance matrix # -
- Kronecker product                # `kron`        #  margins' free parameters # RTMB back-end # the $k$ margins' parameters in order, without the fixed ones (see [Kronecker products])
+ Kronecker product                # `kron`        #  margins' free parameters # RTMB back-end # the margins' parameters in order, without the fixed ones (see [Kronecker products])
 "
 )
 knitr::kable(ctab)
