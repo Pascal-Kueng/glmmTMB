@@ -822,7 +822,7 @@ In most meta-analysis applications we want we set the right-hand grouping term `
 
 ## Kronecker products
 
-`kron()` combines two or more of the structures listed above. Each component is called a *margin*. Their Kronecker product gives a *separable* covariance.
+`kron()` combines two or more *margins*, each a structure listed above. Their Kronecker product gives a *separable* covariance.
 
 Consider two outcomes, or traits, measured repeatedly on each subject. The term `kron(us(0 + trait) %x% ar1(0 + time) | subject)` combines an unstructured trait covariance with AR(1) correlation over time. It gives each subject one random effect $u_{it}$ for each trait $i$ and time point $t$. Within a subject, the covariance between two such random effects is
 
