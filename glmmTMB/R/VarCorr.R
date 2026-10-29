@@ -208,7 +208,7 @@ mkVC <- function(cor, sd, cnms, sc, bc, useSc, fullCor = NULL) {
 ##'
 ##' For a \code{kron()} term, each margin is returned as a block of its own,
 ##' labelled e.g. \code{"subject (kron 1/2)"} and \code{"subject (kron 2/2)"}.
-##' The covariance of the whole term is the \code{kronecker()} product of these blocks, in order.
+##' Within each group, the covariance of the term is the \code{kronecker()} product of these blocks, in order.
 ##' @keywords internal
 VarCorr.glmmTMB <- function(x, sigma = 1, ... )
 {
