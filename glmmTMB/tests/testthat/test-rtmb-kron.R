@@ -148,7 +148,7 @@ test_that("kron() gives clear errors", {
   expect_error(
     glmmTMB(y ~ kron(us(0 + member) %x% ar1(0 + time) | dyad),
             data = kron_data, control = glmmTMBControl(use_rtmb = FALSE)),
-    "needs the RTMB back-end")
+    "needs the RTMB backend")
   expect_error(fit_rtmb(y ~ kron(us(0 + member) %x% kron(0 + time) | dyad)),
                "cannot be kron")
   expect_error(fit_rtmb(y ~ kron(us(0 + member) %x% time | dyad)),

@@ -509,7 +509,7 @@ predict.glmmTMB <- function(object,
     }
     on.exit(do.call(openmp, n_orig), add = TRUE)
 
-    ## rebuild the TMB object with the back-end (C++ or RTMB) used for fitting
+    ## rebuild the TMB object with the backend (C++ or RTMB) used for fitting
     old_use_rtmb <- useRTMB()
     useRTMB(rtmb_fit)
     on.exit(useRTMB(old_use_rtmb), add = TRUE)
