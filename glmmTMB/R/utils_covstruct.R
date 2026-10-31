@@ -80,7 +80,7 @@ parseNumLevels <- function(levels) {
 ##    margins' model matrices.
 ## 3. getReStruc() turns each spec into a covariance term by calling itself,
 ##    and adds theta (start values) and free (which of them are estimated).
-##    Later margins get their scale fixed here.
+##    Margins after the first one with a free scale get their scale fixed here.
 ## 4. kron_nll() fills the estimated values into each margin's theta, then
 ##    combines the margins' densities with RTMB::dseparable() and applies
 ##    any rr loadings.

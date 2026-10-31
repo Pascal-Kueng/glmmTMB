@@ -27,7 +27,7 @@
       \item Smooth random-effect coefficient indices now count coefficients,
       rather than observations, and respect interleaved grouping terms.
       (Gavin Simpson)
-      \item \code{predict()} with new data now uses the back-end the model
+      \item \code{predict()} now uses the back-end the model
       was fitted with, rather than the global \code{useRTMB()} setting
       (Pascal Küng)
     } % itemize
