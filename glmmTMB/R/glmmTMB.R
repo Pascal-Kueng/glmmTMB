@@ -506,15 +506,11 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
     theta <- rr0(nt)
     
     if (ndTheta) {
-      blockNumTheta <- getVal(ReStruc,"blockNumTheta")
-      blockCode  <- getVal(ReStruc, "blockCode")
-      thetaseq <- rep.int(seq_along(blockNumTheta), blockNumTheta)
-      ## factor() keeps terms without theta (e.g. kron() with only equalto margins)
-      tl <- split(theta, factor(thetaseq, seq_along(blockNumTheta)))
-      for(i in 1:length(blockCode)){
-        cls <- names(.valid_covstruct)[match(blockCode[i], .valid_covstruct)]
+      tl <- lapply(getVal(ReStruc, "blockNumTheta"), numeric)
+      for(i in seq_along(ReStruc)){
+        cls <- ReStruc[[i]]$blockName
         tl[[i]] <- if (cls == "kron") { # the margins' estimated theta, see getReStruc()
-            unlist(lapply(ReStruc[[i]]$margins, function(m) m$theta[m$free]))
+          unlist(lapply(ReStruc[[i]]$margins, function(m) m$theta[m$free]))
         } else startTheta(cls, tl[[i]], List[["aa"]][[i]], List$reTrms$cnms[[i]])
       }
       theta <- unlist(tl, use.names = F)
@@ -967,19 +963,17 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="",
 #' @param th default starting values for this structure (length = its number of parameters)
 #' @param a the evaluated additional argument (a matrix for \code{propto} and \code{equalto})
 #' @param cnms column names of the term (or kron margin), used for the \code{equalto} check
-#' @return the starting values, same length as \code{th}
+#' @return the starting values
 #' @noRd
 startTheta <- function(cls, th, a, cnms) {
-    res <- if (cls == "rr") {
-               rep(1, length(th))                          # rr starts at 1
-           } else if (cls == "propto") {
-               c(as.theta.vcov(a), 0)                      # last theta is lambda (proportional parameter)
-           } else if (cls == "equalto") {
-               checkEqualto(aa = a, cnms = cnms)
-               as.theta.vcov(a)
-           } else th
-    stopifnot(length(res) == length(th))
-    res
+    if (cls == "rr") {
+        rep(1, length(th))                          # rr starts at 1
+    } else if (cls == "propto") {
+        c(as.theta.vcov(a), 0)                      # last theta is lambda (proportional parameter)
+    } else if (cls == "equalto") {
+        checkEqualto(aa = a, cnms = cnms)
+        as.theta.vcov(a)
+    } else th
 }
 
 ##' Get theta parameterisation of a covariance structure
@@ -1033,13 +1027,11 @@ map.theta.propto <- function(ReStruc, map, component) {
   map.theta <- c(1:nt) #initialises all parameters as separate values
 
   blockTheta <- getVal(ReStruc,"blockNumTheta")
-  cov_code <- getVal(ReStruc, "blockCode")
   thetaseq <- rep.int(seq_along(blockTheta), blockTheta)
   ## factor() keeps terms without theta (e.g. kron() with only equalto margins)
   tl <- split(map.theta, factor(thetaseq, seq_along(blockTheta)))
-  for(i in 1:length(cov_code)){
-    cls <- names(.valid_covstruct)[match(cov_code[i], .valid_covstruct)]
-    tl[[i]] <- mapStrucTheta(cls, tl[[i]])
+  for(i in seq_along(ReStruc)){
+    tl[[i]] <- mapStrucTheta(ReStruc[[i]]$blockName, tl[[i]])
   }
   map.theta <- unlist(tl, use.names = FALSE)
   if(component == "cond")
