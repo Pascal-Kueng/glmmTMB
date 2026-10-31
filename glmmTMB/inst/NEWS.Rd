@@ -11,8 +11,8 @@
       the Kronecker product of two or more existing structures, e.g.
       \code{kron(us(0 + trait) \%x\% ar1(0 + time) | subject)}. Margins
       can have intercepts and slopes, as in \code{us(1 + x)}, and can be
-      \code{rr}, \code{propto} or \code{equalto} (GH #592, Pascal Küng,
-      Maeve McGillycuddy)
+      \code{rr}, \code{propto} or \code{equalto} (GH #592, #1285, #1353,
+      Pascal Küng, Maeve McGillycuddy)
     } % itemize
   } % new features
   \subsection{USER-VISIBLE CHANGES}{
