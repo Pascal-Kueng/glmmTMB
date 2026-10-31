@@ -5,6 +5,15 @@
 \encoding{UTF-8}
 
 \section{CHANGES IN VERSION 1.1.15.9000}{
+  \subsection{NEW FEATURES}{
+    \itemize{
+      \item new \code{kron()} covariance structure (RTMB back-end only):
+      the Kronecker product of two or more existing structures, e.g.
+      \code{kron(us(0 + trait) \%x\% ar1(0 + time) | subject)}. Margins
+      can have intercepts and slopes, as in \code{us(1 + x)}, and can be
+      \code{rr}, \code{propto} or \code{equalto} (GH #592)
+    } % itemize
+  } % new features
   \subsection{USER-VISIBLE CHANGES}{
     \itemize{
       \item Tweedie simulation is faster, especially when the power
@@ -17,6 +26,8 @@
       \item Smooth random-effect coefficient indices now count coefficients,
       rather than observations, and respect interleaved grouping terms.
       (Gavin Simpson)
+      \item \code{predict()} with new data now uses the back-end the model
+      was fitted with, rather than the global \code{useRTMB()} setting
     } % itemize
   } % bug fixes
 } % 1.1.15.9000
@@ -92,9 +103,6 @@
       back-end, which allows more flexibility without a performance
       cost; the TMB back-end will be maintained for at least the
       next few releases, although new features may be RTMB-only.
-      \item new \code{kron()} covariance structure (RTMB back-end only):
-      the Kronecker product of two or more existing structures, e.g.
-      \code{kron(us(0 + trait) \%x\% ar1(0 + time) | subject)} (GH #592)
     } % itemize
   } % new features
  \subsection{BUG FIXES}{
@@ -167,8 +175,6 @@
       fixed-effect column); the aliased coefficient now gets \code{NA} ddf,
       like its \code{NA} estimate and standard error, rather than erroring
       (GH #1326, @qdread)
-      \item \code{predict()} with new data now uses the back-end the model
-      was fitted with, rather than the global \code{useRTMB()} setting
     }
   } % bug fixes
   \subsection{USER-VISIBLE CHANGES}{
