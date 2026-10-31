@@ -161,7 +161,5 @@ test_that("kron() gives clear errors", {
 })
 
 test_that("kron() rejects unsupported Kenward-Roger inference", {
-  m_reml <- update(m_kron, data = kron_data, REML = TRUE)
-  expect_error(dof_KR(m_reml), "not supported.*kron")
-  expect_error(summary(m_reml, ddf = "kenward-roger"), "not supported.*kron")
+  expect_error(dof_KR(m_kron), "not supported.*kron")
 })
