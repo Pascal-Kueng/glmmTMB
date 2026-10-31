@@ -133,6 +133,8 @@ test_that("kron() works with formula(), simulate() and predict(newdata)", {
   s <- simulate(m_kron, nsim = 2, seed = 1)
   expect_equal(dim(s), c(nrow(kron_data), 2L))
   expect_true(all(is.finite(unlist(s))))
+  ## m_kron was fitted with RTMB, so predict() must switch backends
+  local_useRTMB(FALSE)
   expect_equal(predict(m_kron, newdata = kron_data[1:10, ]),
                predict(m_kron)[1:10])
 
