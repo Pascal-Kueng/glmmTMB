@@ -675,7 +675,7 @@ getParnames <- function(object, full, include_dropped = TRUE, include_mapped = T
       reNames <- function(tag) {
         re <- object$modelInfo$reStruc[[paste0(tag,"ReStruc")]]
         num_theta <- vapply(re,"[[","blockNumTheta", FUN.VALUE = numeric(1))
-        nn <- mapply(function(n,L) paste(n, seq(L), sep="."),
+        nn <- mapply(function(n,L) sprintf("%s.%d", n, seq_len(L)),
                      names(re), num_theta)
         if (length(nn) == 0) return(nn)
         return(paste("theta",gsub(" ", "", unlist(nn)), sep="_"))

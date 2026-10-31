@@ -75,6 +75,7 @@ test_that("kron() margins can be propto or equalto", {
   f2 <- fit_rtmb(y ~ kron(equalto(0 + member, S_member) %x% equalto(0 + time, S_time) | dyad) +
                    (1 | dyad))
   expect_length(getME(f2, "theta"), 1)
+  expect_true("theta_1|dyad.1" %in% colnames(vcov(f2, full = TRUE)))
   ## from glmmTMB#1353: diag(0 + DOP) is a 1 x 1 slope margin, so this is
   ## propto(0 + spp:DOP | site:sample, C)
   data("Salamanders", package = "glmmTMB")
