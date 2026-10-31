@@ -11,7 +11,8 @@
       the Kronecker product of two or more existing structures, e.g.
       \code{kron(us(0 + trait) \%x\% ar1(0 + time) | subject)}. Margins
       can have intercepts and slopes, as in \code{us(1 + x)}, and can be
-      \code{rr}, \code{propto} or \code{equalto} (GH #592)
+      \code{rr}, \code{propto} or \code{equalto} (GH #592, Pascal Küng,
+      Maeve McGillycuddy)
     } % itemize
   } % new features
   \subsection{USER-VISIBLE CHANGES}{
@@ -28,6 +29,7 @@
       (Gavin Simpson)
       \item \code{predict()} with new data now uses the back-end the model
       was fitted with, rather than the global \code{useRTMB()} setting
+      (Pascal Küng)
     } % itemize
   } % bug fixes
 } % 1.1.15.9000
